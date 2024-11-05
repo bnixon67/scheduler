@@ -12,16 +12,16 @@ import (
 
 // Scheduler manages job scheduling and a pool of workers.
 type Scheduler struct {
-	workerPool *workers
-	jobs       sync.Map // Map of job IDs to *Job
+	workers *workers
+	jobs    sync.Map // Map of job IDs to *Job
 }
 
 // NewScheduler creates a new Scheduler and starts the worker pool immediately.
 func NewScheduler(bufferSize int, workerCount int) *Scheduler {
 	s := &Scheduler{
-		workerPool: newWorkers(bufferSize),
+		workers: newWorkers(bufferSize),
 	}
-	s.workerPool.start(workerCount)
+	s.workers.start(workerCount)
 	return s
 }
 
@@ -58,13 +58,13 @@ func (s *Scheduler) AddJob(job *Job) error {
 		return ErrJobIDExists
 	}
 
-	job.start(s.workerPool)
+	job.start(s.workers)
 	return nil
 }
 
 // Stop stops the Scheduler and all its workers.
 func (s *Scheduler) Stop() {
-	s.workerPool.stop()
+	s.workers.stop()
 }
 
 // StopJob stops a specific job from being re-queued.
