@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Job represents a job to be executed periodically.
@@ -19,20 +17,19 @@ type Job struct {
 	stopCh   chan struct{} // Channel to signal the job to stop
 }
 
-// NewJob creates a new Job with a specified interval and a function to
-// run periodically.
-// The interval must be a positive duration, and the run function must not
-// be nil. If either are invalid, NewJob will panic.
-func NewJob(interval time.Duration, run func(string)) *Job {
+// NewJob creates a new Job with specified id, interval, and a function to
+// run periodically.  The interval must be a positive duration, and the run
+// function must not be nil, otherwise NewJob will panic.
+func NewJob(id string, interval time.Duration, run func(string)) *Job {
 	if interval <= 0 {
 		panic("interval must be positive")
 	}
 	if run == nil {
-		panic("run function must not be nil")
+		panic("run function cannot be nil")
 	}
 
 	return &Job{
-		id:       uuid.NewString(),
+		id:       id,
 		interval: interval,
 		run:      run,
 		stopCh:   make(chan struct{}),

@@ -24,6 +24,7 @@ func main() {
 
 	jobs = append(jobs,
 		scheduler.NewJob(
+			"every 30 sec",
 			30*time.Second,
 			func(id string) {
 				log.Println("Job", id)
@@ -36,6 +37,7 @@ func main() {
 	)
 	jobs = append(jobs,
 		scheduler.NewJob(
+			"every 5 minutes",
 			5*time.Minute,
 			func(id string) {
 				log.Println("Job", id)
@@ -48,6 +50,7 @@ func main() {
 	)
 	jobs = append(jobs,
 		scheduler.NewJob(
+			"every hour",
 			1*time.Hour,
 			func(id string) {
 				log.Println("Job", id)
