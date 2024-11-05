@@ -20,7 +20,7 @@ func TestJobExecution(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	// Add the job to the scheduler
-	s.AddJob(scheduler.NewJob(1*time.Second, func() {
+	s.AddJob(scheduler.NewJob(1*time.Second, func(id string) {
 		mu.Lock()
 		executedJobs = append(executedJobs, 1)
 		mu.Unlock()
@@ -51,12 +51,12 @@ func TestMultipleJobExecution(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	// Define multiple jobs with different IDs and intervals
-	s.AddJob(scheduler.NewJob(1*time.Second, func() {
+	s.AddJob(scheduler.NewJob(1*time.Second, func(id string) {
 		mu.Lock()
 		executedJobs[1]++
 		mu.Unlock()
 	}))
-	s.AddJob(scheduler.NewJob(2*time.Second, func() {
+	s.AddJob(scheduler.NewJob(2*time.Second, func(id string) {
 		mu.Lock()
 		executedJobs[2]++
 		mu.Unlock()
@@ -90,7 +90,7 @@ func TestJobRequeue(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	// Define a job that increments executionCount
-	s.AddJob(scheduler.NewJob(1*time.Second, func() {
+	s.AddJob(scheduler.NewJob(1*time.Second, func(id string) {
 		mu.Lock()
 		executionCount++
 		mu.Unlock()
@@ -121,7 +121,7 @@ func TestStopJob(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	// Define a job that increments executionCount
-	job := scheduler.NewJob(1*time.Second, func() {
+	job := scheduler.NewJob(1*time.Second, func(id string) {
 		mu.Lock()
 		executionCount++
 		mu.Unlock()

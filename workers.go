@@ -78,7 +78,7 @@ func (w *workers) executeJob(job *Job) {
 			logger.Error("job panicked", "job", job, "err", r)
 		}
 	}()
-	job.run()
+	job.run(job.id)
 }
 
 // stop gracefully stops all workers and waits for them to finish.

@@ -8,7 +8,6 @@ Scheduler
 - [ ] Consider allowing job restart or should it be Stop and then Add?
 
 Job
-- [ ] add id to run function
 - [ ] NewJob - allow user to provide ID
 - [ ] Update String() - stopped: true/false instead of status: stopped/running
 - [ ] allow run to return bool to stop or continue

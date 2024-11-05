@@ -14,7 +14,7 @@ import (
 type Job struct {
 	id       string
 	interval time.Duration
-	run      func()
+	run      func(string)
 	stop     atomic.Bool   // Atomic flag to stop the job from re-queuing
 	stopCh   chan struct{} // Channel to signal the job to stop
 }
@@ -23,7 +23,7 @@ type Job struct {
 // run periodically.
 // The interval must be a positive duration, and the run function must not
 // be nil. If either are invalid, NewJob will panic.
-func NewJob(interval time.Duration, run func()) *Job {
+func NewJob(interval time.Duration, run func(string)) *Job {
 	if interval <= 0 {
 		panic("interval must be positive")
 	}
