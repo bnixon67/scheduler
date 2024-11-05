@@ -8,9 +8,8 @@ import (
 	"sync"
 )
 
-// workers manages a pool of goroutines that execute jobs concurrently.
-// It handles job scheduling, cancellation, and ensures all workers
-// are properly synchronized and gracefully shut down when needed.
+// workers manages the execution of jobs using goroutines.
+// It handles job queuing, context-based cancellation, and synchronization.
 type workers struct {
 	jobQueue chan *Job
 	ctx      context.Context
@@ -37,13 +36,13 @@ func (w *workers) start(workerCount int) {
 	}
 }
 
-var ErrWorkerPoolStopped = errors.New("worker pool is stopping")
+var ErrWorkersStopping = errors.New("workers are stopping")
 
 // submit adds a job to the job queue or returns an error if the queue is full.
 func (w *workers) submit(job *Job) error {
 	select {
 	case <-w.ctx.Done():
-		return ErrWorkerPoolStopped
+		return ErrWorkersStopping
 	case w.jobQueue <- job:
 		return nil
 	default:
@@ -69,9 +68,8 @@ func (w *workers) worker(id int) {
 	}
 }
 
-// executeJob runs the job's function and recovers from any panics that may
-// occur during its execution. This ensures that a single failing job does
-// not crash the entire worker pool.
+// executeJob runs the job's function and recovers from any panics to prevent
+// a failing job from crashing the workers.
 func (w *workers) executeJob(job *Job) {
 	defer func() {
 		if r := recover(); r != nil {

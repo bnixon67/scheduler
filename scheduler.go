@@ -1,7 +1,8 @@
 // Copyright (c) 2024 Bill Nixon
 
-// Package scheduler provides a job scheduling and execution framework
-// that manages periodic tasks using a pool of worker goroutines.
+// Package scheduler manages and executes jobs periodically. It uses worker
+// goroutines to handle concurrent job executions and provides mechanisms
+// to start, stop, and monitor jobs.
 package scheduler
 
 import (
@@ -10,13 +11,14 @@ import (
 	"sync"
 )
 
-// Scheduler manages job scheduling and a pool of workers.
+// Scheduler manages job scheduling and execution using worker goroutines.
+// It maintains a collection of jobs and handles distribution and lifecycle.
 type Scheduler struct {
 	workers *workers
 	jobs    sync.Map // Map of job IDs to *Job
 }
 
-// NewScheduler creates a new Scheduler and starts the worker pool immediately.
+// NewScheduler creates a new Scheduler and starts the workers immediately.
 func NewScheduler(bufferSize int, workerCount int) *Scheduler {
 	s := &Scheduler{
 		workers: newWorkers(bufferSize),

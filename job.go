@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Job represents a job to be executed periodically.
+// Job defines a periodic task with an interval and a function to execute.
 type Job struct {
 	id       string
 	interval time.Duration
@@ -17,9 +17,8 @@ type Job struct {
 	stopCh   chan struct{} // Channel to signal the job to stop
 }
 
-// NewJob creates a new Job with specified id, interval, and a function to
-// run periodically.  The interval must be a positive duration, and the run
-// function must not be nil, otherwise NewJob will panic.
+// NewJob returns a new Job with the given ID, interval, and run function.
+// Panics if the interval is non-positive or the run function is nil.
 func NewJob(id string, interval time.Duration, run func(string)) *Job {
 	if interval <= 0 {
 		panic("interval must be positive")
@@ -46,7 +45,8 @@ func (job *Job) String() string {
 		job.id, job.interval, isStopped)
 }
 
-// start initiates the job's execution loop in a new goroutine.
+// start begins the job's periodic execution in a separate goroutine.
+// Execution will stop if the job is marked as stopped or the context is done.
 func (job *Job) start(wp *workers) {
 	go func() {
 		if job.stop.Load() {
@@ -94,7 +94,7 @@ func (job *Job) Interval() time.Duration {
 	return job.interval
 }
 
-// ID returns the interval at which the job is scheduled to run.
+// ID returns the id of the job.
 func (job *Job) ID() string {
 	return job.id
 }

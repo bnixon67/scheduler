@@ -11,4 +11,3 @@ Job
 - [ ] Update String() - stopped: true/false instead of status: stopped/running
 - [ ] allow run to return bool to stop or continue
 - [ ] Stop() - update comment to indicate it closes the stopCh
-- [ ] ID() - fix function comment

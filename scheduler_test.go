@@ -9,7 +9,7 @@ import (
 	"github.com/bnixon67/scheduler"
 )
 
-// TestJobExecution verifies that a job is executed by the worker pool at least once.
+// TestJobExecution verifies that a job is executed at least once.
 func TestJobExecution(t *testing.T) {
 	var mu sync.Mutex
 	executedJobs := []int{}
@@ -40,7 +40,7 @@ func TestJobExecution(t *testing.T) {
 	}
 }
 
-// TestMultipleJobExecution verifies that multiple jobs are executed by the worker pool.
+// TestMultipleJobExecution verifies that multiple jobs are executed workers.
 func TestMultipleJobExecution(t *testing.T) {
 	var mu sync.Mutex
 	executedJobs := map[int]int{}
