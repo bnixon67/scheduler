@@ -4,7 +4,6 @@ General
 - [ ] Split out test functions from scheduler_test.go
 
 Scheduler
-- [ ] Rename workerPool to workers
 - [ ] Don't delete from map in StopJob to allow restart?
 - [ ] Consider allowing job restart or should it be Stop and then Add?
 
