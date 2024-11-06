@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -12,54 +15,74 @@ import (
 	"github.com/bnixon67/scheduler"
 )
 
+func init() {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+}
+
+func printStats() {
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	fmt.Printf("Alloc = %v KB,", memStats.Alloc/1024)
+	fmt.Printf("TotalAlloc = %v KB,", memStats.TotalAlloc/1024)
+	fmt.Printf("Sys = %v KB,", memStats.Sys/1024)
+	fmt.Printf("NumGoroutines = %v\n", runtime.NumGoroutine())
+}
+
 func main() {
-	s := scheduler.NewScheduler(3, 3)
+	s := scheduler.NewScheduler(10, 5)
 
 	var (
-		timesMap      = make(map[int][]time.Time)
+		timesMap      = make(map[string][]time.Time)
 		timesMapMutex = sync.Mutex{}
 	)
 
-	var jobs []*scheduler.Job
-
-	jobs = append(jobs,
+	jobs := []*scheduler.Job{
+		scheduler.NewJob(
+			"stats",
+			30*time.Second,
+			func(id string) {
+				log.Println("Job", id)
+				timesMapMutex.Lock()
+				timesMap[id] = append(timesMap[id], time.Now())
+				timesMapMutex.Unlock()
+				printStats()
+			},
+		),
 		scheduler.NewJob(
 			"every 30 sec",
 			30*time.Second,
 			func(id string) {
 				log.Println("Job", id)
 				timesMapMutex.Lock()
-				timesMap[0] = append(timesMap[0], time.Now())
+				timesMap[id] = append(timesMap[id], time.Now())
 				timesMapMutex.Unlock()
 				time.Sleep(1 * time.Second)
-
-			}),
-	)
-	jobs = append(jobs,
+			},
+		),
 		scheduler.NewJob(
 			"every 5 minutes",
 			5*time.Minute,
 			func(id string) {
 				log.Println("Job", id)
 				timesMapMutex.Lock()
-				timesMap[1] = append(timesMap[1], time.Now())
+				timesMap[id] = append(timesMap[id], time.Now())
 				timesMapMutex.Unlock()
 				time.Sleep(5 * time.Second)
 
 			}),
-	)
-	jobs = append(jobs,
 		scheduler.NewJob(
 			"every hour",
 			1*time.Hour,
 			func(id string) {
 				log.Println("Job", id)
 				timesMapMutex.Lock()
-				timesMap[2] = append(timesMap[2], time.Now())
+				timesMap[id] = append(timesMap[id], time.Now())
 				timesMapMutex.Unlock()
 				time.Sleep(10 * time.Second)
 			}),
-	)
+	}
 
 	for n := range jobs {
 		s.AddJob(jobs[n])
@@ -77,7 +100,7 @@ func main() {
 
 	for n := range jobs {
 		fmt.Printf("%d %s\n", n, jobs[n])
-		for _, t := range timesMap[n] {
+		for _, t := range timesMap[jobs[n].ID()] {
 			fmt.Println("\t", t.Format("15:04:05"))
 		}
 	}
