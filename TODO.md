@@ -1,5 +1,4 @@
 General
-- [ ] Create an error.go file?
 - [ ] Move logger to Scheduler to avoid package global
 - [ ] Split out test functions from scheduler_test.go
 

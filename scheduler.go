@@ -6,7 +6,6 @@
 package scheduler
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 )
@@ -49,8 +48,6 @@ func (s *Scheduler) Job(id string) *Job {
 	job, _ := value.(*Job)
 	return job
 }
-
-var ErrJobIDExists = errors.New("job ID already exists")
 
 // AddJob submits a job to the scheduler and stores it in the jobs map.
 // It returns an error if the job could not be added to the job queue.

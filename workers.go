@@ -36,8 +36,6 @@ func (w *workers) start(workerCount int) {
 	}
 }
 
-var ErrWorkersStopping = errors.New("workers are stopping")
-
 // submit adds a job to the job queue or returns an error if the queue is full.
 func (w *workers) submit(job *Job) error {
 	select {
