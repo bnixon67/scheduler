@@ -5,7 +5,6 @@ Scheduler
 - [ ] Provide a GracefulStop method on Scheduler to allow active jobs to complete within a specified timeout, avoiding abrupt termination.
 
 Job
-- [ ] Update String() - stopped: true/false instead of status: stopped/running
 - [ ] allow run to return bool to stop or continue the job
 - [ ] Stop() - update comment to indicate it closes the stopCh
 - [ ] In Job.start, the error from submit(job) is logged, but it may benefit from more detailed handling (e.g., retries or backoff if a queue is full) instead of silently ignoring issues.
