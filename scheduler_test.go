@@ -2,6 +2,7 @@ package scheduler_test
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -145,5 +146,158 @@ func TestStopJob(t *testing.T) {
 	defer mu.Unlock()
 	if executionCount != 1 {
 		t.Errorf("Expected job to be executed only once, but got %d executions", executionCount)
+	}
+}
+
+// TestNewJobPanics verifies that NewJob panics on invalid inputs.
+func TestNewJobPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected NewJob to panic on invalid inputs, but it did not")
+		}
+	}()
+	// This should panic due to non-positive interval
+	scheduler.NewJob("test", 0, func(id string) {})
+}
+
+// TestNewJobWithNilRunFunction verifies that NewJob panics if the run function is nil.
+func TestNewJobWithNilRunFunction(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected NewJob to panic when run function is nil, but it did not")
+		}
+	}()
+	// This should panic due to nil run function
+	scheduler.NewJob("test", 1*time.Second, nil)
+}
+
+// TestStopNonExistentJob verifies that StopJob returns an error for non-existent jobs.
+func TestStopNonExistentJob(t *testing.T) {
+	s := scheduler.NewScheduler(10, 1)
+	defer s.Stop()
+
+	err := s.StopJob("non-existent-job")
+	if err == nil {
+		t.Errorf("Expected error when stopping a non-existent job, but got nil")
+	}
+}
+
+// TestSchedulerJobs verifies that Jobs method returns correct job IDs.
+func TestSchedulerJobs(t *testing.T) {
+	s := scheduler.NewScheduler(10, 1)
+	defer s.Stop()
+
+	job1 := scheduler.NewJob("job1", 1*time.Second, func(id string) {})
+	job2 := scheduler.NewJob("job2", 2*time.Second, func(id string) {})
+	s.AddJob(job1)
+	s.AddJob(job2)
+
+	jobIDs := s.Jobs()
+	if len(jobIDs) != 2 {
+		t.Errorf("Expected 2 jobs, but got %d", len(jobIDs))
+	}
+	if jobIDs[0] != "job1" || jobIDs[1] != "job2" {
+		t.Errorf("Expected job IDs to be [job1, job2], but got %v", jobIDs)
+	}
+}
+
+// TestDuplicateJobID verifies that adding a job with a duplicate ID returns an error.
+func TestDuplicateJobID(t *testing.T) {
+	s := scheduler.NewScheduler(10, 1)
+	defer s.Stop()
+
+	job := scheduler.NewJob("test", 1*time.Second, func(id string) {})
+	s.AddJob(job)
+
+	err := s.AddJob(scheduler.NewJob("test", 2*time.Second, func(id string) {}))
+	if err != scheduler.ErrJobIDExists {
+		t.Errorf("Expected error %v, but got %v", scheduler.ErrJobIDExists, err)
+	}
+}
+
+// TestConcurrentJobExecution checks for race conditions by concurrently executing jobs.
+func TestConcurrentJobExecution(t *testing.T) {
+	var mu sync.Mutex
+	executionCount := 0
+
+	s := scheduler.NewScheduler(10, 5) // Increase workers to allow concurrent execution
+	defer s.Stop()
+
+	// Define a job that increments executionCount
+	job := scheduler.NewJob("test", 100*time.Millisecond, func(id string) {
+		mu.Lock()
+		executionCount++
+		mu.Unlock()
+	})
+
+	// Add the job and wait a moment to allow multiple executions
+	s.AddJob(job)
+
+	// Allow the job to execute several times concurrently
+	time.Sleep(1 * time.Second)
+
+	// Verify execution count
+	mu.Lock()
+	defer mu.Unlock()
+	if executionCount < 5 {
+		t.Errorf("Expected at least 5 executions, got %d", executionCount)
+	}
+}
+
+// TestConcurrentSchedulerStop verifies stopping the scheduler concurrently with job execution.
+func TestConcurrentSchedulerStop(t *testing.T) {
+	s := scheduler.NewScheduler(10, 2)
+	defer s.Stop()
+
+	// Define a job that continuously runs
+	job := scheduler.NewJob("test", 100*time.Millisecond, func(id string) {
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	// Add job and start stopping scheduler concurrently
+	s.AddJob(job)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(200 * time.Millisecond)
+		s.Stop()
+	}()
+
+	// Wait for scheduler to stop without race conditions
+	wg.Wait()
+}
+
+// TestMultipleJobConcurrentExecution verifies multiple jobs run concurrently without interference.
+func TestMultipleJobConcurrentExecution(t *testing.T) {
+	var mu sync.Mutex
+	executions := make(map[string]int)
+
+	s := scheduler.NewScheduler(10, 5)
+	defer s.Stop()
+
+	// Add multiple jobs
+	for i := 1; i <= 5; i++ {
+		jobID := "job" + strconv.Itoa(i)
+		s.AddJob(scheduler.NewJob(jobID, 200*time.Millisecond, func(id string) {
+			mu.Lock()
+			executions[id]++
+			mu.Unlock()
+		}))
+	}
+
+	// Allow jobs to execute concurrently for a short period
+	time.Sleep(1 * time.Second)
+
+	// Verify each job executed at least once
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 1; i <= 5; i++ {
+		jobID := "job" + strconv.Itoa(i)
+		if executions[jobID] == 0 {
+			t.Errorf("Expected job %s to execute, but it did not", jobID)
+		}
 	}
 }
