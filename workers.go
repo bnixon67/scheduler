@@ -57,7 +57,7 @@ func (w *workers) worker(id int) {
 	for {
 		select {
 		case job := <-w.jobQueue:
-			if !job.stop.Load() {
+			if !job.isStopped.Load() {
 				w.executeJob(job)
 			}
 		case <-w.ctx.Done():
