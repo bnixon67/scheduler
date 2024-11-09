@@ -6,6 +6,7 @@
 package scheduler
 
 import (
+	"log/slog"
 	"sync"
 )
 
@@ -14,15 +15,33 @@ import (
 type Scheduler struct {
 	workers *Workers
 	jobs    sync.Map // Map of job IDs to *Job
+	logger  *slog.Logger
 }
 
 // NewScheduler creates a new Scheduler and starts the workers immediately.
-func NewScheduler(bufferSize int, workerCount int) *Scheduler {
+func NewScheduler(bufferSize int, workerCount int, opts ...SchedulerOption) *Scheduler {
 	s := &Scheduler{
 		workers: newWorkers(bufferSize),
+		logger:  slog.Default(),
 	}
+
+	// Apply each option to the scheduler
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	s.workers.start(workerCount)
+
 	return s
+}
+
+type SchedulerOption func(*Scheduler)
+
+// WithLogger sets a custom logger for the Scheduler.
+func WithLogger(logger *slog.Logger) SchedulerOption {
+	return func(s *Scheduler) {
+		s.logger = logger
+	}
 }
 
 // Jobs returns a slice of job IDs for the jobs currently scheduled.
@@ -54,6 +73,9 @@ func (s *Scheduler) AddJob(job *Job) error {
 	if job == nil {
 		return ErrJobIsNil
 	}
+
+	// Assign Scheduler's logger to Job
+	job.logger = s.logger
 
 	// Check for duplicate job IDs
 	if _, loaded := s.jobs.LoadOrStore(job.id, job); loaded {

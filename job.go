@@ -3,7 +3,9 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 )
@@ -17,15 +19,7 @@ type Job struct {
 	maxExecutions int64         // Max executions; 0 for indefinite
 	executions    atomic.Int64  // Current number of executions
 	stopCh        chan struct{} // Channel to signal the job to stop
-}
-
-// defaultRecoverFunc is called when a panic occurs in a job's run function
-// and no custom recover function is provided. It logs the panic if logger
-// is defined.
-func defaultRecoverFunc(job *Job, v any) {
-	if logger != nil {
-		logger.Error("job panicked", "job", job, "err", v)
-	}
+	logger        *slog.Logger
 }
 
 // JobOption defines a function type for setting optional parameters in a Job.
@@ -62,6 +56,7 @@ func NewJob(id string, interval time.Duration, run func(string), opts ...JobOpti
 		run:         run,
 		recoverFunc: defaultRecoverFunc,
 		stopCh:      make(chan struct{}),
+		logger:      slog.Default(),
 	}
 
 	// Apply each option to the job
@@ -84,8 +79,11 @@ func (job *Job) Interval() time.Duration {
 
 // Stop prevents the job from being re-queued.
 func (job *Job) Stop() {
+	job.logger.Debug("stop", "job", job)
+
 	select {
 	case <-job.stopCh: // If already closed, do nothing
+		job.logger.Warn("stopCh is already closed", "job", job)
 	default:
 		close(job.stopCh)
 	}
@@ -97,15 +95,29 @@ func (job *Job) String() string {
 		job.id, job.interval, isChannelClosed(job.stopCh))
 }
 
+func (job *Job) handleSubmitError(err error) {
+	logLevel := job.logger.Error
+	if errors.Is(err, ErrWorkersStopping) {
+		logLevel = job.logger.Info
+	}
+
+	logLevel("failed to submit job", "job", job, "err", err)
+}
+
 // start begins the job's periodic execution in a separate goroutine.
 // Execution will stop if the job is marked as stopped or the context is done.
 func (job *Job) start(wp *Workers) {
-	go func() {
-		// Initial job submission
-		if err := wp.submit(job); err != nil && logger != nil {
-			logger.Error("failed to submit job",
-				"job", job, "err", err)
+	log := job.logger.With("job", job) // Attach job context once
+
+	// Helper function
+	submitJob := func() {
+		if err := wp.submit(job); err != nil {
+			job.handleSubmitError(err)
 		}
+	}
+
+	go func() {
+		submitJob() // Initial job submission
 
 		// Start the periodic execution ticker
 		ticker := time.NewTicker(job.interval)
@@ -114,14 +126,14 @@ func (job *Job) start(wp *Workers) {
 		for {
 			select {
 			case <-wp.ctx.Done():
+				log.Debug("context done", "job", job)
 				return
 			case <-job.stopCh: // Listen for stop signal from stopCh
+				log.Debug("stopCh closed", "job", job)
 				return
 			case <-ticker.C:
-				if err := wp.submit(job); err != nil && logger != nil {
-					logger.Error("failed to submit job",
-						"job", job, "err", err)
-				}
+				log.Debug("requeue", "job", job)
+				submitJob() // Requeue job
 			}
 		}
 	}()
@@ -137,4 +149,11 @@ func isChannelClosed(ch <-chan struct{}) bool {
 		// If no value is received, the channel is still open
 		return false
 	}
+}
+
+// defaultRecoverFunc is called when a panic occurs in a job's run function
+// and no custom recover function is provided. It logs the panic if logger
+// is defined.
+func defaultRecoverFunc(job *Job, v any) {
+	job.logger.Error("job panicked", "job", job, "err", v)
 }

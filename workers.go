@@ -37,9 +37,10 @@ func (w *Workers) start(workerCount int) {
 
 // submit adds a job to the job queue or returns an error if the queue is full.
 func (w *Workers) submit(job *Job) error {
-	// Check if the job has reached max executions and stop if so
+	// Stop if the job has reached max executions
 	if job.maxExecutions > 0 && job.executions.Load() >= job.maxExecutions {
 		job.Stop()
+		job.logger.Debug("job reached max executions", "job", job)
 		return nil
 	}
 
