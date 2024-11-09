@@ -10,16 +10,35 @@ import (
 
 // Job defines a periodic task with an interval and a function to execute.
 type Job struct {
-	id        string
-	interval  time.Duration
-	run       func(string)
-	isStopped atomic.Bool   // Atomic flag to stop the job from re-queuing
-	stopCh    chan struct{} // Channel to signal the job to stop
+	id          string
+	interval    time.Duration
+	run         func(string)
+	recoverFunc func(*Job, any)
+	isStopped   atomic.Bool   // Atomic flag to stop the job from re-queuing
+	stopCh      chan struct{} // Channel to signal the job to stop
+}
+
+// defaultRecoverFunc is called when a panic occurs in a job's run function
+// and no custom recover function is provided. It logs the panic.
+func defaultRecoverFunc(job *Job, v any) {
+	if logger != nil {
+		logger.Error("job panicked", "job", job, "err", v)
+	}
+}
+
+// JobOption defines a function type for setting optional parameters in a Job.
+type JobOption func(*Job)
+
+// WithRecoverFunc sets a custom recover function for the job.
+func WithRecoverFunc(recoverFunc func(*Job, any)) JobOption {
+	return func(j *Job) {
+		j.recoverFunc = recoverFunc
+	}
 }
 
 // NewJob returns a new Job with the given ID, interval, and run function.
 // Panics if the interval is non-positive or the run function is nil.
-func NewJob(id string, interval time.Duration, run func(string)) *Job {
+func NewJob(id string, interval time.Duration, run func(string), opts ...JobOption) *Job {
 	if interval <= 0 {
 		panic("interval must be positive")
 	}
@@ -27,12 +46,20 @@ func NewJob(id string, interval time.Duration, run func(string)) *Job {
 		panic("run function cannot be nil")
 	}
 
-	return &Job{
-		id:       id,
-		interval: interval,
-		run:      run,
-		stopCh:   make(chan struct{}),
+	job := &Job{
+		id:          id,
+		interval:    interval,
+		run:         run,
+		recoverFunc: defaultRecoverFunc,
+		stopCh:      make(chan struct{}),
 	}
+
+	// Apply each option to the job
+	for _, opt := range opts {
+		opt(job)
+	}
+
+	return job
 }
 
 // ID returns the id of the job.
@@ -68,8 +95,10 @@ func (job *Job) start(wp *workers) {
 
 		// Submit the job immediately
 		if err := wp.submit(job); err != nil {
-			logger.Error("failed to submit job",
-				"job", job, "err", err)
+			if logger != nil {
+				logger.Error("failed to submit job",
+					"job", job, "err", err)
+			}
 		}
 
 		// Start the ticker with the job's interval
@@ -87,8 +116,10 @@ func (job *Job) start(wp *workers) {
 					return
 				}
 				if err := wp.submit(job); err != nil {
-					logger.Error("failed to submit job",
-						"job", job, "err", err)
+					if logger != nil {
+						logger.Error("failed to submit job",
+							"job", job, "err", err)
+					}
 				}
 			}
 		}

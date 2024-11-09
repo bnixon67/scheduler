@@ -12,7 +12,7 @@ import (
 	"github.com/bnixon67/scheduler"
 )
 
-// TestSchedulerJob verifies that retrival of a job by ID from Scheduler works.
+// TestSchedulerJob verifies that retrieval of a job by ID from Scheduler works.
 func TestSchedulerJob(t *testing.T) {
 	s := scheduler.NewScheduler(1, 1)
 
@@ -362,6 +362,55 @@ func TestSchedulerAddJobNil(t *testing.T) {
 	wantErr := scheduler.ErrJobIsNil
 	if gotErr != wantErr {
 		t.Errorf("got error %q, want %q", gotErr, wantErr)
+	}
+
+}
+
+// TestSchedulerWithJobPanic verifies the scheduler handles a run function
+// that panics.
+func TestSchedulerWithJobPanic(t *testing.T) {
+	var executions atomic.Int32
+	var panics atomic.Int32
+
+	s := scheduler.NewScheduler(5, 2)
+
+	// Use t.Cleanup to ensure resources are cleaned up
+	t.Cleanup(s.Stop)
+
+	job := scheduler.NewJob(
+		"test",
+		1*time.Second,
+		func(id string) {
+			executions.Add(1)
+			panic("panic job")
+		},
+		scheduler.WithRecoverFunc(func(job *scheduler.Job, v any) {
+			panics.Add(1)
+		}),
+	)
+	s.AddJob(job)
+
+	// Use a context with timeout to wait for job to finish.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	<-ctx.Done() // Wait for the context to expire
+
+	// Check if the job was executed at least once
+	gotExecutions := executions.Load()
+	if gotExecutions < 1 {
+		t.Errorf("got %d executions, want at least 1", gotExecutions)
+	}
+
+	// Check if panic function was executed at least once
+	gotPanics := panics.Load()
+	if gotExecutions < 1 {
+		t.Errorf("got %d panics, want at least 1", gotPanics)
+	}
+
+	if gotExecutions != gotPanics {
+		t.Errorf("want executions %d to match panics %d",
+			gotExecutions, gotPanics)
 	}
 
 }

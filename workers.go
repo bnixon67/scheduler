@@ -4,7 +4,6 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"sync"
 )
 
@@ -44,7 +43,7 @@ func (w *workers) submit(job *Job) error {
 	case w.jobQueue <- job:
 		return nil
 	default:
-		return errors.New("job queue is full")
+		return ErrJobQueueIsFull
 	}
 }
 
@@ -71,7 +70,9 @@ func (w *workers) worker(id int) {
 func (w *workers) executeJob(job *Job) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error("job panicked", "job", job, "err", r)
+			if job.recoverFunc != nil {
+				job.recoverFunc(job, r)
+			}
 		}
 	}()
 	job.run(job.id)
