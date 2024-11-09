@@ -21,7 +21,11 @@ func TestSchedulerJob(t *testing.T) {
 
 	jobID := "test"
 
-	wantJob := scheduler.NewJob(jobID, 1*time.Second, func(string) {})
+	wantJob := scheduler.NewJob(
+		jobID,
+		1*time.Second,
+		func(*scheduler.Job) bool { return true },
+	)
 	s.AddJob(wantJob)
 
 	gotJob := s.Job(jobID)
@@ -49,9 +53,16 @@ func TestSchedulerWithOneJob(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	// Add the job to the scheduler
-	s.AddJob(scheduler.NewJob("test", 1*time.Second, func(id string) {
-		executions.Add(1)
-	}))
+	s.AddJob(
+		scheduler.NewJob(
+			"test",
+			time.Second,
+			func(*scheduler.Job) bool {
+				executions.Add(1)
+				return true
+			},
+		),
+	)
 
 	// Use a context with timeout to wait for job to finish.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -74,10 +85,11 @@ func TestSchedulerWithMultipleJobs(t *testing.T) {
 	var mu sync.Mutex
 	executions := map[string]int{}
 
-	runFunc := func(id string) {
+	runFunc := func(job *scheduler.Job) bool {
 		mu.Lock()
-		executions[id]++
+		executions[job.ID()]++
 		mu.Unlock()
+		return true
 	}
 
 	jobs := []*scheduler.Job{
@@ -123,9 +135,16 @@ func TestSchedulerRequeue(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	// Define a job that increments executionCount
-	s.AddJob(scheduler.NewJob("test", 1*time.Second, func(id string) {
-		executions.Add(1)
-	}))
+	s.AddJob(
+		scheduler.NewJob(
+			"test",
+			1*time.Second,
+			func(*scheduler.Job) bool {
+				executions.Add(1)
+				return true
+			},
+		),
+	)
 
 	// Use a context with timeout to wait for job to run multiple times.
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -152,9 +171,14 @@ func TestSchedulerStopJob(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	// Define a job that increments executionCount
-	job := scheduler.NewJob("test", 1*time.Second, func(id string) {
-		executions.Add(1)
-	})
+	job := scheduler.NewJob(
+		"test",
+		time.Second,
+		func(*scheduler.Job) bool {
+			executions.Add(1)
+			return true
+		},
+	)
 	s.AddJob(job)
 
 	// Wait for the job to execute at least once
@@ -210,8 +234,10 @@ func TestSchedulerJobs(t *testing.T) {
 	s := scheduler.NewScheduler(10, 1)
 	defer s.Stop()
 
-	job1 := scheduler.NewJob("job1", time.Second, func(string) {})
-	job2 := scheduler.NewJob("job2", time.Second, func(string) {})
+	runFunc := func(*scheduler.Job) bool { return true }
+
+	job1 := scheduler.NewJob("job1", time.Second, runFunc)
+	job2 := scheduler.NewJob("job2", time.Second, runFunc)
 	s.AddJob(job1)
 	s.AddJob(job2)
 
@@ -236,8 +262,10 @@ func TestSchedulerDuplicateJobID(t *testing.T) {
 	s := scheduler.NewScheduler(1, 1)
 	defer s.Stop()
 
-	job1 := scheduler.NewJob("test", time.Second, func(string) {})
-	job2 := scheduler.NewJob("test", time.Second, func(string) {})
+	runFunc := func(*scheduler.Job) bool { return true }
+
+	job1 := scheduler.NewJob("test", time.Second, runFunc)
+	job2 := scheduler.NewJob("test", time.Second, runFunc)
 
 	if err := s.AddJob(job1); err != nil {
 		t.Errorf("got error %q, want %v", err, nil)
@@ -257,9 +285,14 @@ func TestSchedulerConcurrentExecution(t *testing.T) {
 	s := scheduler.NewScheduler(10, 5)
 	t.Cleanup(s.Stop)
 
-	job := scheduler.NewJob("test", 100*time.Millisecond, func(string) {
-		executions.Add(1)
-	})
+	job := scheduler.NewJob(
+		"test",
+		100*time.Millisecond,
+		func(*scheduler.Job) bool {
+			executions.Add(1)
+			return true
+		},
+	)
 
 	s.AddJob(job)
 
@@ -284,10 +317,15 @@ func TestSchedulerConcurrentStop(t *testing.T) {
 	var executions atomic.Int32
 
 	// Define a job that increments the counter and simulates some work
-	job := scheduler.NewJob("test", 100*time.Millisecond, func(id string) {
-		executions.Add(1)
-		time.Sleep(50 * time.Millisecond)
-	})
+	job := scheduler.NewJob(
+		"test",
+		100*time.Millisecond,
+		func(*scheduler.Job) bool {
+			executions.Add(1)
+			time.Sleep(50 * time.Millisecond)
+			return true
+		},
+	)
 
 	// Add the job to the scheduler
 	s.AddJob(job)
@@ -332,11 +370,18 @@ func TestSchedulerMultipleJobsConcurrent(t *testing.T) {
 	// Add multiple jobs
 	for i := 1; i <= 5; i++ {
 		jobID := "job" + strconv.Itoa(i)
-		s.AddJob(scheduler.NewJob(jobID, 200*time.Millisecond, func(id string) {
-			mu.Lock()
-			executions[id]++
-			mu.Unlock()
-		}))
+		s.AddJob(
+			scheduler.NewJob(
+				jobID,
+				200*time.Millisecond,
+				func(job *scheduler.Job) bool {
+					mu.Lock()
+					executions[job.ID()]++
+					mu.Unlock()
+					return true
+				},
+			),
+		)
 	}
 
 	// Allow jobs to execute concurrently for a short period
@@ -380,9 +425,10 @@ func TestSchedulerWithJobPanic(t *testing.T) {
 	job := scheduler.NewJob(
 		"test",
 		1*time.Second,
-		func(id string) {
+		func(*scheduler.Job) bool {
 			executions.Add(1)
 			panic("panic job")
+			return true
 		},
 		scheduler.WithRecoverFunc(func(job *scheduler.Job, v any) {
 			panics.Add(1)
@@ -430,8 +476,9 @@ func TestSchedulerWithMaxExecutions(t *testing.T) {
 	job := scheduler.NewJob(
 		"test",
 		500*time.Millisecond,
-		func(id string) {
+		func(*scheduler.Job) bool {
 			executions.Add(1)
+			return true
 		},
 		scheduler.WithMaxExecutions(wantExecutions),
 	)
@@ -444,6 +491,79 @@ func TestSchedulerWithMaxExecutions(t *testing.T) {
 	<-ctx.Done() // Wait for the context to expire
 
 	// Check if the job was executed at least once
+	gotExecutions := executions.Load()
+	if gotExecutions != wantExecutions {
+		t.Errorf("got %d executions, want %d executions",
+			gotExecutions, wantExecutions)
+	}
+}
+
+// TestSchedulerWithRunFalse verifies the scheduler stops requeue of job if
+// run returns false.
+func TestSchedulerWithRunFalse(t *testing.T) {
+	var executions atomic.Int64
+
+	s := scheduler.NewScheduler(5, 2)
+
+	// Use t.Cleanup to ensure resources are cleaned up
+	t.Cleanup(s.Stop)
+
+	wantExecutions := int64(1)
+
+	job := scheduler.NewJob(
+		"test",
+		500*time.Millisecond,
+		func(*scheduler.Job) bool {
+			executions.Add(1)
+			return false
+		},
+	)
+	s.AddJob(job)
+
+	// Use a context with timeout to wait for job to finish.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	<-ctx.Done() // Wait for the context to expire
+
+	// Check if the job was executed correctly
+	gotExecutions := executions.Load()
+	if gotExecutions != wantExecutions {
+		t.Errorf("got %d executions, want %d executions",
+			gotExecutions, wantExecutions)
+	}
+}
+
+// TestSchedulerWithRunStop verifies the scheduler stops requeue if run
+// uses job.Stop().
+func TestSchedulerWithRunStop(t *testing.T) {
+	var executions atomic.Int64
+
+	s := scheduler.NewScheduler(5, 2)
+
+	// Use t.Cleanup to ensure resources are cleaned up
+	t.Cleanup(s.Stop)
+
+	wantExecutions := int64(1)
+
+	job := scheduler.NewJob(
+		"test",
+		500*time.Millisecond,
+		func(job *scheduler.Job) bool {
+			executions.Add(1)
+			job.Stop()
+			return true
+		},
+	)
+	s.AddJob(job)
+
+	// Use a context with timeout to wait for job to finish.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	<-ctx.Done() // Wait for the context to expire
+
+	// Check if the job was executed correctly
 	gotExecutions := executions.Load()
 	if gotExecutions != wantExecutions {
 		t.Errorf("got %d executions, want %d executions",

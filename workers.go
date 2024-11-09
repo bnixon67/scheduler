@@ -63,7 +63,10 @@ func (w *Workers) worker(id int) {
 	for {
 		select {
 		case job := <-w.jobQueueCh:
-			w.executeJob(job)
+			// Execute the job and stop if run returns false
+			if !w.executeJob(job) {
+				job.Stop()
+			}
 		case <-w.ctx.Done():
 			return
 		}
@@ -72,15 +75,17 @@ func (w *Workers) worker(id int) {
 
 // executeJob runs the job's function and recovers from any panics to prevent
 // a failing job from crashing the workers.
-func (w *Workers) executeJob(job *Job) {
+func (w *Workers) executeJob(job *Job) bool {
 	defer func() {
 		if r := recover(); r != nil && job.recoverFunc != nil {
 			job.recoverFunc(job, r)
 		}
 	}()
 
-	job.run(job.id)       // Execute the job
-	job.executions.Add(1) // Increment the execution count
+	result := job.run(job) // Execute the job
+	job.executions.Add(1)  // Increment the execution count
+
+	return result
 }
 
 // stop gracefully stops all workers and waits for them to finish.

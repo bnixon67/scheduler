@@ -42,46 +42,51 @@ func main() {
 		scheduler.NewJob(
 			"stats",
 			30*time.Second,
-			func(id string) {
-				log.Println("Job", id)
+			func(job *scheduler.Job) bool {
+				log.Println(job)
 				timesMapMutex.Lock()
-				timesMap[id] = append(timesMap[id], time.Now())
+				timesMap[job.ID()] = append(timesMap[job.ID()], time.Now())
 				timesMapMutex.Unlock()
 				printStats()
+				return true
 			},
 		),
 		scheduler.NewJob(
-			"every 30 sec",
+			"30 sec",
 			30*time.Second,
-			func(id string) {
-				log.Println("Job", id)
+			func(job *scheduler.Job) bool {
+				log.Println(job)
 				timesMapMutex.Lock()
-				timesMap[id] = append(timesMap[id], time.Now())
+				timesMap[job.ID()] = append(timesMap[job.ID()], time.Now())
 				timesMapMutex.Unlock()
 				time.Sleep(1 * time.Second)
+				return true
 			},
 		),
 		scheduler.NewJob(
-			"every 5 minutes",
+			"5 mins",
 			5*time.Minute,
-			func(id string) {
-				log.Println("Job", id)
+			func(job *scheduler.Job) bool {
+				log.Println(job)
 				timesMapMutex.Lock()
-				timesMap[id] = append(timesMap[id], time.Now())
+				timesMap[job.ID()] = append(timesMap[job.ID()], time.Now())
 				timesMapMutex.Unlock()
 				time.Sleep(5 * time.Second)
-
-			}),
+				return true
+			},
+		),
 		scheduler.NewJob(
-			"every hour",
+			"1 hour",
 			1*time.Hour,
-			func(id string) {
-				log.Println("Job", id)
+			func(job *scheduler.Job) bool {
+				log.Println(job)
 				timesMapMutex.Lock()
-				timesMap[id] = append(timesMap[id], time.Now())
+				timesMap[job.ID()] = append(timesMap[job.ID()], time.Now())
 				timesMapMutex.Unlock()
 				time.Sleep(10 * time.Second)
-			}),
+				return true
+			},
+		),
 	}
 
 	for n := range jobs {

@@ -16,7 +16,7 @@ func TestJobNewJobInterval(t *testing.T) {
 	}()
 
 	// This should panic due to non-positive interval
-	scheduler.NewJob("test", 0, func(id string) {})
+	scheduler.NewJob("test", 0, func(*scheduler.Job) bool { return true })
 }
 
 // TestJobNewJobRunFunc verifies that NewJob panics on invalid run function.
@@ -35,7 +35,11 @@ func TestJobNewJobRunFunc(t *testing.T) {
 func TestJobString(t *testing.T) {
 	want := "Job{id: test, interval: 1s, isStopped: false}"
 
-	job := scheduler.NewJob("test", 1*time.Second, func(id string) {})
+	job := scheduler.NewJob(
+		"test",
+		1*time.Second,
+		func(*scheduler.Job) bool { return true },
+	)
 
 	if job.String() != want {
 		t.Errorf("\ngot  %v,\nwant %v\nfor job.String()",
@@ -54,7 +58,11 @@ func TestJobString(t *testing.T) {
 func TestJobID(t *testing.T) {
 	jobID := "test"
 
-	job := scheduler.NewJob(jobID, time.Second, func(id string) {})
+	job := scheduler.NewJob(
+		jobID,
+		time.Second,
+		func(*scheduler.Job) bool { return true },
+	)
 
 	got := job.ID()
 	want := jobID
@@ -68,7 +76,11 @@ func TestJobInterval(t *testing.T) {
 	jobID := "test"
 	jobInterval := 42 * time.Second
 
-	job := scheduler.NewJob(jobID, jobInterval, func(id string) {})
+	job := scheduler.NewJob(
+		jobID,
+		jobInterval,
+		func(*scheduler.Job) bool { return true },
+	)
 
 	got := job.Interval()
 	want := jobInterval

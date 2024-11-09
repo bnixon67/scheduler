@@ -10,7 +10,7 @@ import (
 func TestJobNewJob(t *testing.T) {
 	id := "test_job"
 	interval := 1 * time.Second
-	runFunc := func(jobID string) {}
+	runFunc := func(*Job) bool { return true }
 
 	// Call NewJob with valid parameters
 	job := NewJob(id, interval, runFunc)
@@ -32,7 +32,7 @@ func TestJobNewJob(t *testing.T) {
 
 // TestStop verifies if Stop correctly sets the job to be stopped.
 func TestJobStop(t *testing.T) {
-	job := NewJob("test", time.Second, func(string) {})
+	job := NewJob("test", time.Second, func(*Job) bool { return true })
 	job.Stop()
 
 	got := isChannelClosed(job.stopCh)

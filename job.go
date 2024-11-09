@@ -14,7 +14,7 @@ import (
 type Job struct {
 	id            string
 	interval      time.Duration
-	run           func(string)
+	run           func(*Job) bool
 	recoverFunc   func(*Job, any)
 	maxExecutions int64         // Max executions; 0 for indefinite
 	executions    atomic.Int64  // Current number of executions
@@ -42,7 +42,7 @@ func WithMaxExecutions(n int64) JobOption {
 
 // NewJob returns a new Job with the given ID, interval, and run function.
 // Panics if the interval is non-positive or the run function is nil.
-func NewJob(id string, interval time.Duration, run func(string), opts ...JobOption) *Job {
+func NewJob(id string, interval time.Duration, run func(*Job) bool, opts ...JobOption) *Job {
 	if interval <= 0 {
 		panic("interval must be positive")
 	}
@@ -79,13 +79,13 @@ func (job *Job) Interval() time.Duration {
 
 // Stop prevents the job from being re-queued.
 func (job *Job) Stop() {
-	job.logger.Debug("stop", "job", job)
 
 	select {
 	case <-job.stopCh: // If already closed, do nothing
 		job.logger.Warn("stopCh is already closed", "job", job)
 	default:
 		close(job.stopCh)
+		job.logger.Debug("stopped", "job", job)
 	}
 }
 
@@ -105,7 +105,7 @@ func (job *Job) handleSubmitError(err error) {
 }
 
 // start begins the job's periodic execution in a separate goroutine.
-// Execution will stop if the job is marked as stopped or the context is done.
+// It will stop if `run` returns false or `job.Stop()` is called.
 func (job *Job) start(wp *Workers) {
 	log := job.logger.With("job", job) // Attach job context once
 
