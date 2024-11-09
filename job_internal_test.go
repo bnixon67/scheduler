@@ -30,31 +30,13 @@ func TestJobNewJob(t *testing.T) {
 	}
 }
 
-// isChannelClosed returns true if ch is closed, otherwise false.
-func isChannelClosed(ch <-chan struct{}) bool {
-	select {
-	case <-ch:
-		// If a value is received, the channel is closed
-		return true
-	default:
-		// If no value is received, the channel is still open
-		return false
-	}
-}
-
 // TestStop verifies if Stop correctly sets the job to be stopped.
 func TestJobStop(t *testing.T) {
 	job := NewJob("test", time.Second, func(string) {})
 	job.Stop()
 
-	got := job.isStopped.Load()
+	got := isChannelClosed(job.stopCh)
 	want := true
-	if got != want {
-		t.Errorf("got %t, want %t for job.isStopped", got, want)
-	}
-
-	got = isChannelClosed(job.stopCh)
-	want = true
 	if got != want {
 		t.Errorf("got %t, want %t for isChannelClosed(job.stopCh)",
 			got, want)

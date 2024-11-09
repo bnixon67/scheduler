@@ -37,6 +37,12 @@ func (w *workers) start(workerCount int) {
 
 // submit adds a job to the job queue or returns an error if the queue is full.
 func (w *workers) submit(job *Job) error {
+	// Check if the job has reached max executions and stop if so
+	if job.maxExecutions > 0 && job.executions.Load() >= job.maxExecutions {
+		job.Stop()
+		return nil
+	}
+
 	select {
 	case <-w.ctx.Done():
 		return ErrWorkersStopping
@@ -56,9 +62,7 @@ func (w *workers) worker(id int) {
 	for {
 		select {
 		case job := <-w.jobQueue:
-			if !job.isStopped.Load() {
-				w.executeJob(job)
-			}
+			w.executeJob(job)
 		case <-w.ctx.Done():
 			return
 		}
@@ -69,13 +73,13 @@ func (w *workers) worker(id int) {
 // a failing job from crashing the workers.
 func (w *workers) executeJob(job *Job) {
 	defer func() {
-		if r := recover(); r != nil {
-			if job.recoverFunc != nil {
-				job.recoverFunc(job, r)
-			}
+		if r := recover(); r != nil && job.recoverFunc != nil {
+			job.recoverFunc(job, r)
 		}
 	}()
-	job.run(job.id)
+
+	job.run(job.id)       // Execute the job
+	job.executions.Add(1) // Increment the execution count
 }
 
 // stop gracefully stops all workers and waits for them to finish.

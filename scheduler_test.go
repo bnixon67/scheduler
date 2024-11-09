@@ -414,3 +414,39 @@ func TestSchedulerWithJobPanic(t *testing.T) {
 	}
 
 }
+
+// TestSchedulerWithMaxExecutions verifies the scheduler handles max executions
+// for a job.
+func TestSchedulerWithMaxExecutions(t *testing.T) {
+	var executions atomic.Int64
+
+	s := scheduler.NewScheduler(5, 2)
+
+	// Use t.Cleanup to ensure resources are cleaned up
+	t.Cleanup(s.Stop)
+
+	wantExecutions := int64(3)
+
+	job := scheduler.NewJob(
+		"test",
+		500*time.Millisecond,
+		func(id string) {
+			executions.Add(1)
+		},
+		scheduler.WithMaxExecutions(wantExecutions),
+	)
+	s.AddJob(job)
+
+	// Use a context with timeout to wait for job to finish.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	<-ctx.Done() // Wait for the context to expire
+
+	// Check if the job was executed at least once
+	gotExecutions := executions.Load()
+	if gotExecutions != wantExecutions {
+		t.Errorf("got %d executions, want %d executions",
+			gotExecutions, wantExecutions)
+	}
+}

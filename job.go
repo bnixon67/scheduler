@@ -10,12 +10,13 @@ import (
 
 // Job defines a periodic task with an interval and a function to execute.
 type Job struct {
-	id          string
-	interval    time.Duration
-	run         func(string)
-	recoverFunc func(*Job, any)
-	isStopped   atomic.Bool   // Atomic flag to stop the job from re-queuing
-	stopCh      chan struct{} // Channel to signal the job to stop
+	id            string
+	interval      time.Duration
+	run           func(string)
+	recoverFunc   func(*Job, any)
+	maxExecutions int64         // Max executions; 0 for indefinite
+	executions    atomic.Int64  // Current number of executions
+	stopCh        chan struct{} // Channel to signal the job to stop
 }
 
 // defaultRecoverFunc is called when a panic occurs in a job's run function
@@ -33,6 +34,14 @@ type JobOption func(*Job)
 func WithRecoverFunc(recoverFunc func(*Job, any)) JobOption {
 	return func(j *Job) {
 		j.recoverFunc = recoverFunc
+	}
+}
+
+// WithMaxExecutions sets a maximum number of executions for the job.
+// If 0, run indefinitely.
+func WithMaxExecutions(n int64) JobOption {
+	return func(j *Job) {
+		j.maxExecutions = n
 	}
 }
 
@@ -74,7 +83,9 @@ func (job *Job) Interval() time.Duration {
 
 // Stop sets the stop flag to prevent the job from being re-queued.
 func (job *Job) Stop() {
-	if job.isStopped.CompareAndSwap(false, true) {
+	select {
+	case <-job.stopCh: // If already closed, do nothing
+	default:
 		close(job.stopCh)
 	}
 }
@@ -82,26 +93,20 @@ func (job *Job) Stop() {
 // String returns a human-readable representation of the Job.
 func (job *Job) String() string {
 	return fmt.Sprintf("Job{id: %s, interval: %s, isStopped: %t}",
-		job.id, job.interval, job.isStopped.Load())
+		job.id, job.interval, isChannelClosed(job.stopCh))
 }
 
 // start begins the job's periodic execution in a separate goroutine.
 // Execution will stop if the job is marked as stopped or the context is done.
 func (job *Job) start(wp *workers) {
 	go func() {
-		if job.isStopped.Load() {
-			return
+		// Initial job submission
+		if err := wp.submit(job); err != nil && logger != nil {
+			logger.Error("failed to submit job",
+				"job", job, "err", err)
 		}
 
-		// Submit the job immediately
-		if err := wp.submit(job); err != nil {
-			if logger != nil {
-				logger.Error("failed to submit job",
-					"job", job, "err", err)
-			}
-		}
-
-		// Start the ticker with the job's interval
+		// Start the periodic execution ticker
 		ticker := time.NewTicker(job.interval)
 		defer ticker.Stop()
 
@@ -109,19 +114,26 @@ func (job *Job) start(wp *workers) {
 			select {
 			case <-wp.ctx.Done():
 				return
-			case <-job.stopCh:
+			case <-job.stopCh: // Listen for stop signal from stopCh
 				return
 			case <-ticker.C:
-				if job.isStopped.Load() {
-					return
-				}
-				if err := wp.submit(job); err != nil {
-					if logger != nil {
-						logger.Error("failed to submit job",
-							"job", job, "err", err)
-					}
+				if err := wp.submit(job); err != nil && logger != nil {
+					logger.Error("failed to submit job",
+						"job", job, "err", err)
 				}
 			}
 		}
 	}()
+}
+
+// isChannelClosed returns true if ch is closed, otherwise false.
+func isChannelClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		// If a value is received, the channel is closed
+		return true
+	default:
+		// If no value is received, the channel is still open
+		return false
+	}
 }
