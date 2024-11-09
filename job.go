@@ -82,7 +82,7 @@ func (job *Job) Interval() time.Duration {
 	return job.interval
 }
 
-// Stop sets the stop flag to prevent the job from being re-queued.
+// Stop prevents the job from being re-queued.
 func (job *Job) Stop() {
 	select {
 	case <-job.stopCh: // If already closed, do nothing
