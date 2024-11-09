@@ -52,6 +52,10 @@ func (s *Scheduler) Job(id string) *Job {
 // AddJob submits a job to the scheduler and stores it in the jobs map.
 // It returns an error if the job could not be added to the job queue.
 func (s *Scheduler) AddJob(job *Job) error {
+	if job == nil {
+		return ErrJobIsNil
+	}
+
 	// Check for duplicate job IDs
 	if _, loaded := s.jobs.LoadOrStore(job.id, job); loaded {
 		return ErrJobIDExists

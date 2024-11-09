@@ -35,6 +35,23 @@ func NewJob(id string, interval time.Duration, run func(string)) *Job {
 	}
 }
 
+// ID returns the id of the job.
+func (job *Job) ID() string {
+	return job.id
+}
+
+// Interval returns the interval at which the job is scheduled to run.
+func (job *Job) Interval() time.Duration {
+	return job.interval
+}
+
+// Stop sets the stop flag to prevent the job from being re-queued.
+func (job *Job) Stop() {
+	if job.isStopped.CompareAndSwap(false, true) {
+		close(job.stopCh)
+	}
+}
+
 // String returns a human-readable representation of the Job.
 func (job *Job) String() string {
 	return fmt.Sprintf("Job{id: %s, interval: %s, isStopped: %t}",
@@ -76,21 +93,4 @@ func (job *Job) start(wp *workers) {
 			}
 		}
 	}()
-}
-
-// Stop sets the stop flag to prevent the job from being re-queued.
-func (job *Job) Stop() {
-	if job.isStopped.CompareAndSwap(false, true) {
-		close(job.stopCh)
-	}
-}
-
-// Interval returns the interval at which the job is scheduled to run.
-func (job *Job) Interval() time.Duration {
-	return job.interval
-}
-
-// ID returns the id of the job.
-func (job *Job) ID() string {
-	return job.id
 }
