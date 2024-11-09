@@ -1,6 +1,3 @@
-General
-- [ ] Move logger to Scheduler to avoid package global
-
 Scheduler
 - [ ] Provide a GracefulStop method on Scheduler to allow active jobs to complete within a specified timeout, avoiding abrupt termination.
 
