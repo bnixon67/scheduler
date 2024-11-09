@@ -20,7 +20,8 @@ type Job struct {
 }
 
 // defaultRecoverFunc is called when a panic occurs in a job's run function
-// and no custom recover function is provided. It logs the panic.
+// and no custom recover function is provided. It logs the panic if logger
+// is defined.
 func defaultRecoverFunc(job *Job, v any) {
 	if logger != nil {
 		logger.Error("job panicked", "job", job, "err", v)
@@ -98,7 +99,7 @@ func (job *Job) String() string {
 
 // start begins the job's periodic execution in a separate goroutine.
 // Execution will stop if the job is marked as stopped or the context is done.
-func (job *Job) start(wp *workers) {
+func (job *Job) start(wp *Workers) {
 	go func() {
 		// Initial job submission
 		if err := wp.submit(job); err != nil && logger != nil {

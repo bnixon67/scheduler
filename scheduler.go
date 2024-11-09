@@ -6,14 +6,13 @@
 package scheduler
 
 import (
-	"fmt"
 	"sync"
 )
 
 // Scheduler manages job scheduling and execution using worker goroutines.
 // It maintains a collection of jobs and handles distribution and lifecycle.
 type Scheduler struct {
-	workers *workers
+	workers *Workers
 	jobs    sync.Map // Map of job IDs to *Job
 }
 
@@ -77,7 +76,7 @@ func (s *Scheduler) StopJob(jobID string) error {
 		job.Stop() // Set the stop flag to true
 		s.jobs.Delete(jobID)
 	} else {
-		return fmt.Errorf("job %s not found", jobID)
+		return ErrJobNotFound
 	}
 	return nil
 }
