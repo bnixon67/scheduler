@@ -12,6 +12,3 @@ Job
 - [ ] Allow jobs to adjust their interval dynamically
 - [ ] Implement a priority system for jobs, allowing high-priority jobs to be executed before others.
 - [ ] add a maximum execution time for each job and an optional onTimeout function 
-
-Workers
-- [ ] Enhance comment for executeJob to not that it handle panics and won’t halt workers
