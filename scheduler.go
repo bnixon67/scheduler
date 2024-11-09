@@ -93,12 +93,13 @@ func (s *Scheduler) Stop() {
 
 // StopJob stops a specific job from being re-queued.
 func (s *Scheduler) StopJob(jobID string) error {
-	if value, ok := s.jobs.Load(jobID); ok {
-		job := value.(*Job)
-		job.Stop() // Set the stop flag to true
-		s.jobs.Delete(jobID)
-	} else {
+	value, ok := s.jobs.LoadAndDelete(jobID)
+	if !ok {
 		return ErrJobNotFound
 	}
+
+	job := value.(*Job)
+	job.Stop()
+
 	return nil
 }
