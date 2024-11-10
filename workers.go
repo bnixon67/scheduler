@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 )
 
@@ -14,16 +15,18 @@ type Workers struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+	logger     *slog.Logger
 }
 
 // newWorkers creates and initializes a new instance of workers with a given
 // job queue buffer size.
-func newWorkers(bufferSize int) *Workers {
+func newWorkers(bufferSize int, logger *slog.Logger) *Workers {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Workers{
 		jobQueueCh: make(chan *Job, bufferSize),
 		ctx:        ctx,
 		cancel:     cancel,
+		logger:     logger,
 	}
 }
 
@@ -57,12 +60,18 @@ func (w *Workers) submit(job *Job) error {
 // worker is a goroutine that continuously processes jobs from the jobQueue.
 // It executes jobs until the context is canceled, ensuring that each job
 // is run safely and any panic during execution is handled gracefully.
-func (w *Workers) worker(id int) {
+func (w *Workers) worker(workerID int) {
+	w.logger.Debug("started", "workerID", workerID)
+	defer w.logger.Debug("stopped", "workerID", workerID)
+
 	defer w.wg.Done()
 
 	for {
 		select {
 		case job := <-w.jobQueueCh:
+			w.logger.Debug("executing",
+				"workerID", workerID,
+				"job", job)
 			// Execute the job and stop if run returns false
 			if !w.executeJob(job) {
 				job.Stop()

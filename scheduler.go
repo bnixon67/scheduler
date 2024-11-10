@@ -21,8 +21,7 @@ type Scheduler struct {
 // NewScheduler creates a new Scheduler and starts the workers immediately.
 func NewScheduler(bufferSize int, workerCount int, opts ...SchedulerOption) *Scheduler {
 	s := &Scheduler{
-		workers: newWorkers(bufferSize),
-		logger:  slog.Default(),
+		logger: slog.Default(),
 	}
 
 	// Apply each option to the scheduler
@@ -30,6 +29,7 @@ func NewScheduler(bufferSize int, workerCount int, opts ...SchedulerOption) *Sch
 		opt(s)
 	}
 
+	s.workers = newWorkers(bufferSize, s.logger)
 	s.workers.start(workerCount)
 
 	return s
