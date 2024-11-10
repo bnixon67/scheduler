@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-// Job defines a periodic task with an interval and a function to execute.
+// Job represents a periodic task that executes at a specified interval.
+// A Job runs until it is stopped, reaches its maximum executions, or its
+// `run` function returns false.  Optional behaviors, like panic recovery
+// and execution limits, can be configured.
 type Job struct {
 	id            string
 	interval      time.Duration
@@ -22,32 +25,44 @@ type Job struct {
 	logger        *slog.Logger
 }
 
-// String returns a human-readable representation of the Job.
+// String returns a human-readable representation of the Job, including its
+// ID, interval, maximum executions, current execution count, and whether
+// the job is stopped.
 func (job *Job) String() string {
 	return fmt.Sprintf("Job{id: %s, interval: %s, maxExecutions: %d, executions: %d, isStopped: %t}",
 		job.id, job.interval, job.maxExecutions, job.executions.Load(), isChannelClosed(job.stopCh))
 }
 
-// JobOption defines a function type for setting optional parameters in a Job.
+// JobOption defines a configuration function for customizing Job behavior.
 type JobOption func(*Job)
 
-// WithRecoverFunc sets a custom recover function for the job.
+// WithRecoverFunc configures a custom function to handle panics during
+// the job's execution. If the job's `run` function panics, this recovery
+// function is called with the Job and the panic value, enabling custom
+// error handling or cleanup.
 func WithRecoverFunc(recoverFunc func(*Job, any)) JobOption {
 	return func(j *Job) {
 		j.recoverFunc = recoverFunc
 	}
 }
 
-// WithMaxExecutions sets a maximum number of executions for the job.
-// If 0, run indefinitely.
+// WithMaxExecutions limits the number of times a job will run. If `n` is 0,
+// the job runs indefinitely. Use this option to control how many times the
+// job executes before stopping automatically.
 func WithMaxExecutions(n uint64) JobOption {
 	return func(j *Job) {
 		j.maxExecutions = n
 	}
 }
 
-// NewJob returns a new Job with the given ID, interval, and run function.
-// Panics if the interval is non-positive or the run function is nil.
+// NewJob creates a periodic job with a unique ID, a positive interval between
+// executions, and a `run` function that executes at each interval. Optional
+// settings can be applied using JobOptions. The job stops re-queuing if the
+// `run` function returns false.
+//
+// Panics if the interval is non-positive or if `run` is nil.
+//
+// Returns a pointer to the configured Job.
 func NewJob(id string, interval time.Duration, run func(*Job) bool, opts ...JobOption) *Job {
 	if interval <= 0 {
 		panic("interval must be positive")
@@ -73,17 +88,19 @@ func NewJob(id string, interval time.Duration, run func(*Job) bool, opts ...JobO
 	return job
 }
 
-// ID returns the id of the job.
+// ID returns the unique identifier for the Job, which can be used to
+// reference or manage the job within a scheduler.
 func (job *Job) ID() string {
 	return job.id
 }
 
-// Interval returns the interval at which the job is scheduled to run.
+// Interval returns the time duration between each execution of the Job.
 func (job *Job) Interval() time.Duration {
 	return job.interval
 }
 
-// Stop prevents the job from being re-queued.
+// Stop signals the Job to halt further execution. Once stopped, the Job
+// will not be re-queued or run again.
 func (job *Job) Stop() {
 
 	select {
@@ -95,6 +112,10 @@ func (job *Job) Stop() {
 	}
 }
 
+// logSubmitError logs an error encountered when submitting the Job for
+// execution.  Adjusts the log level based on the error type, using Info
+// for expected stop conditions (like ErrWorkersStopping) and Error for
+// other cases.
 func (job *Job) logSubmitError(err error) {
 	logLevel := job.logger.Error
 	if errors.Is(err, ErrWorkersStopping) {
@@ -104,8 +125,9 @@ func (job *Job) logSubmitError(err error) {
 	logLevel("failed to submit job", "job", job, "err", err)
 }
 
-// start begins the job's periodic execution in a separate goroutine.
-// It will stop if `run` returns false or `job.Stop()` is called.
+// start begins the periodic execution of the Job in a separate goroutine.
+// The Job will continue to execute at each interval until it is stopped,
+// its `run` function returns false, or the context of the workers is canceled.
 func (job *Job) start(wp *Workers) {
 	log := job.logger.With("job", job) // Attach job context once
 
@@ -139,7 +161,8 @@ func (job *Job) start(wp *Workers) {
 	}()
 }
 
-// isChannelClosed returns true if ch is closed, otherwise false.
+// isChannelClosed checks if a given channel has been closed. It returns true
+// if the channel is closed, and false if it is still open.
 func isChannelClosed(ch <-chan struct{}) bool {
 	select {
 	case <-ch:
