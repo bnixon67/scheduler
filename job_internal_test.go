@@ -25,8 +25,14 @@ func TestJobNewJob(t *testing.T) {
 	if reflect.ValueOf(job.run).Pointer() != reflect.ValueOf(runFunc).Pointer() {
 		t.Errorf("Expected job run function to match, but it did not")
 	}
-	if job.stopCh == nil {
-		t.Error("Expected job stopCh to be initialized, but got nil")
+	if job.logger == nil {
+		t.Error("Expected logger to be initialized, but got nil")
+	}
+	if job.ctx == nil {
+		t.Error("Expected ctx to be initialized, but got nil")
+	}
+	if job.cancel == nil {
+		t.Error("Expected cancel to be initialized, but got nil")
 	}
 }
 
@@ -35,10 +41,10 @@ func TestJobStop(t *testing.T) {
 	job := NewJob("test", time.Second, func(*Job) bool { return true })
 	job.Stop()
 
-	got := isChannelClosed(job.stopCh)
+	got := job.isStopped()
 	want := true
 	if got != want {
-		t.Errorf("got %t, want %t for isChannelClosed(job.stopCh)",
+		t.Errorf("got %t, want %t for job.isClosed()",
 			got, want)
 	}
 }

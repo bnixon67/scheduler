@@ -3,6 +3,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,14 +22,15 @@ type Job struct {
 	recoverFunc   func(*Job, any)
 	maxExecutions uint64
 	executions    atomic.Uint64
-	stopCh        chan struct{}
 	logger        *slog.Logger
+	ctx           context.Context    // Job's context for cancellation
+	cancel        context.CancelFunc // Function to cancel the job
 }
 
 // String returns a human-readable representation of the Job.
 func (job *Job) String() string {
 	return fmt.Sprintf("Job{id: %s, interval: %s, maxExecutions: %d, executions: %d, isStopped: %t}",
-		job.id, job.interval, job.maxExecutions, job.executions.Load(), isChannelClosed(job.stopCh))
+		job.id, job.interval, job.maxExecutions, job.executions.Load(), job.isStopped())
 }
 
 // JobOption configures optional Job parameters.
@@ -62,13 +64,15 @@ func NewJob(id string, interval time.Duration, run func(*Job) bool, opts ...JobO
 		panic("interval must be positive; run function cannot be nil")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	job := &Job{
 		id:          id,
 		interval:    interval,
 		run:         run,
 		recoverFunc: defaultRecoverFunc,
-		stopCh:      make(chan struct{}),
 		logger:      slog.Default(),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	// Apply each option to the job
@@ -92,13 +96,8 @@ func (job *Job) Interval() time.Duration {
 
 // Stop prevents the job from being re-queued.
 func (job *Job) Stop() {
-	select {
-	case <-job.stopCh:
-		job.logger.Info("already stopped", "job", job)
-	default:
-		close(job.stopCh)
-		job.logger.Debug("stopped", "job", job)
-	}
+	job.cancel() // Cancel the job context
+	job.logger.Debug("stopped", "job", job)
 }
 
 // logSummitError is a helper to log submit errors based on error type.
@@ -132,8 +131,8 @@ func (job *Job) schedule(workers *Workers) {
 			case <-workers.ctx.Done():
 				log.Debug("workers done", "job", job)
 				return
-			case <-job.stopCh:
-				log.Debug("channel closed", "job", job)
+			case <-job.ctx.Done():
+				log.Debug("job done", "job", job)
 				return
 			case <-ticker.C:
 				log.Debug("requeue", "job", job)
@@ -145,14 +144,12 @@ func (job *Job) schedule(workers *Workers) {
 	}()
 }
 
-// isChannelClosed checks a channel is closed.
-func isChannelClosed(ch <-chan struct{}) bool {
+// isStopped checks if the job's context has been canceled.
+func (job *Job) isStopped() bool {
 	select {
-	case <-ch:
-		// If a value is received, the channel is closed
+	case <-job.ctx.Done():
 		return true
 	default:
-		// If no value is received, the channel is still open
 		return false
 	}
 }

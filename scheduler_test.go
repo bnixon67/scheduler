@@ -570,3 +570,41 @@ func TestSchedulerWithRunStop(t *testing.T) {
 			gotExecutions, wantExecutions)
 	}
 }
+
+// TestHighFrequencyJob verifies that a high-frequency job can handle rapid
+// re-queuing and execution.
+func TestHighFrequencyJob(t *testing.T) {
+	var executionCount atomic.Int32
+	s := scheduler.NewScheduler(10, 5)
+
+	t.Cleanup(s.Stop)
+
+	// Define a high-frequency job with a 1ms interval
+	highFreqJob := scheduler.NewJob(
+		"high_freq_test",
+		1*time.Millisecond,
+		func(*scheduler.Job) bool {
+			executionCount.Add(1)
+			return true
+		},
+	)
+
+	// Add the high-frequency job to the scheduler
+	s.AddJob(highFreqJob)
+
+	// Use a context with a timeout to control the test duration
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Wait for the context to expire
+	<-ctx.Done()
+
+	// Capture the number of executions within the test duration
+	executions := executionCount.Load()
+
+	// Check that the job executed a reasonable number of times.
+	// This threshold can be adjusted depending on machine speed.
+	if executions < 50 {
+		t.Errorf("expected high-frequency job to execute at least 50 times, got %d", executions)
+	}
+}
