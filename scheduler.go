@@ -11,7 +11,6 @@ import (
 )
 
 // Scheduler manages job scheduling and execution using worker goroutines.
-// It maintains a collection of jobs and handles distribution and lifecycle.
 type Scheduler struct {
 	workers *Workers
 	jobs    sync.Map // Map of job IDs to *Job
@@ -23,8 +22,6 @@ func NewScheduler(bufferSize int, workerCount int, opts ...SchedulerOption) *Sch
 	s := &Scheduler{
 		logger: slog.Default(),
 	}
-
-	// Apply each option to the scheduler
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -39,21 +36,20 @@ type SchedulerOption func(*Scheduler)
 
 // WithLogger sets a custom logger for the Scheduler.
 func WithLogger(logger *slog.Logger) SchedulerOption {
-	return func(s *Scheduler) {
-		s.logger = logger
-	}
+	return func(s *Scheduler) { s.logger = logger }
 }
 
-// Jobs returns a slice of job IDs for the jobs currently scheduled.
+// Jobs returns IDs of scheduled jobs.
 func (s *Scheduler) Jobs() []string {
 	var ids []string
+
 	s.jobs.Range(func(key, value interface{}) bool {
-		id, ok := key.(string)
-		if ok {
+		if id, ok := key.(string); ok {
 			ids = append(ids, id)
 		}
 		return true
 	})
+
 	return ids
 }
 
@@ -63,8 +59,8 @@ func (s *Scheduler) Job(id string) *Job {
 	if !ok {
 		return nil
 	}
-	job, _ := value.(*Job)
-	return job
+
+	return value.(*Job)
 }
 
 // AddJob submits a job to the scheduler and stores it in the jobs map.
@@ -88,7 +84,7 @@ func (s *Scheduler) AddJob(job *Job) error {
 	return nil
 }
 
-// Stop stops the Scheduler and all its workers.
+// Stop halts the scheduler workers.
 func (s *Scheduler) Stop() {
 	s.workers.stop()
 }
@@ -100,8 +96,7 @@ func (s *Scheduler) StopJob(jobID string) error {
 		return ErrJobNotFound
 	}
 
-	job := value.(*Job)
-	job.Stop()
+	value.(*Job).Stop()
 
 	return nil
 }

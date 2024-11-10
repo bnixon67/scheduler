@@ -19,21 +19,19 @@ type Job struct {
 	interval      time.Duration
 	run           func(*Job) bool
 	recoverFunc   func(*Job, any)
-	maxExecutions uint64        // Max executions; 0 for indefinite
-	executions    atomic.Uint64 // Current number of executions
-	stopCh        chan struct{} // Channel to signal the job to stop
+	maxExecutions uint64
+	executions    atomic.Uint64
+	stopCh        chan struct{}
 	logger        *slog.Logger
 }
 
-// String returns a human-readable representation of the Job, including its
-// ID, interval, maximum executions, current execution count, and whether
-// the job is stopped.
+// String returns a human-readable representation of the Job.
 func (job *Job) String() string {
 	return fmt.Sprintf("Job{id: %s, interval: %s, maxExecutions: %d, executions: %d, isStopped: %t}",
 		job.id, job.interval, job.maxExecutions, job.executions.Load(), isChannelClosed(job.stopCh))
 }
 
-// JobOption defines a configuration function for customizing Job behavior.
+// JobOption configures optional Job parameters.
 type JobOption func(*Job)
 
 // WithRecoverFunc configures a custom function to handle panics during
@@ -41,18 +39,14 @@ type JobOption func(*Job)
 // function is called with the Job and the panic value, enabling custom
 // error handling or cleanup.
 func WithRecoverFunc(recoverFunc func(*Job, any)) JobOption {
-	return func(j *Job) {
-		j.recoverFunc = recoverFunc
-	}
+	return func(j *Job) { j.recoverFunc = recoverFunc }
 }
 
 // WithMaxExecutions limits the number of times a job will run. If `n` is 0,
 // the job runs indefinitely. Use this option to control how many times the
 // job executes before stopping automatically.
 func WithMaxExecutions(n uint64) JobOption {
-	return func(j *Job) {
-		j.maxExecutions = n
-	}
+	return func(j *Job) { j.maxExecutions = n }
 }
 
 // NewJob creates a periodic job with a unique ID, a positive interval between
@@ -64,11 +58,8 @@ func WithMaxExecutions(n uint64) JobOption {
 //
 // Returns a pointer to the configured Job.
 func NewJob(id string, interval time.Duration, run func(*Job) bool, opts ...JobOption) *Job {
-	if interval <= 0 {
-		panic("interval must be positive")
-	}
-	if run == nil {
-		panic("run function cannot be nil")
+	if interval <= 0 || run == nil {
+		panic("interval must be positive; run function cannot be nil")
 	}
 
 	job := &Job{
@@ -99,23 +90,18 @@ func (job *Job) Interval() time.Duration {
 	return job.interval
 }
 
-// Stop signals the Job to halt further execution. Once stopped, the Job
-// will not be re-queued or run again.
+// Stop prevents the job from being re-queued.
 func (job *Job) Stop() {
-
 	select {
-	case <-job.stopCh: // If already closed, do nothing
-		job.logger.Warn("stopCh is already closed", "job", job)
+	case <-job.stopCh:
+		job.logger.Warn("already stopped", "job", job)
 	default:
 		close(job.stopCh)
 		job.logger.Debug("stopped", "job", job)
 	}
 }
 
-// logSubmitError logs an error encountered when submitting the Job for
-// execution.  Adjusts the log level based on the error type, using Info
-// for expected stop conditions (like ErrWorkersStopping) and Error for
-// other cases.
+// logSummitError is a helper to log submit errors based on error type.
 func (job *Job) logSubmitError(err error) {
 	logLevel := job.logger.Error
 	if errors.Is(err, ErrWorkersStopping) {
@@ -125,21 +111,21 @@ func (job *Job) logSubmitError(err error) {
 	logLevel("failed to submit job", "job", job, "err", err)
 }
 
+// submit is helper function to submit job and handle errors.
+func (job *Job) submit(wp *Workers) {
+	if err := wp.submit(job); err != nil {
+		job.logSubmitError(err)
+	}
+}
+
 // start begins the periodic execution of the Job in a separate goroutine.
 // The Job will continue to execute at each interval until it is stopped,
 // its `run` function returns false, or the context of the workers is canceled.
-func (job *Job) start(wp *Workers) {
+func (job *Job) start(workers *Workers) {
 	log := job.logger.With("job", job) // Attach job context once
 
-	// Helper function
-	submitJob := func() {
-		if err := wp.submit(job); err != nil {
-			job.logSubmitError(err)
-		}
-	}
-
 	go func() {
-		submitJob() // Initial job submission
+		job.submit(workers) // Initial job submission
 
 		// Start the periodic execution ticker
 		ticker := time.NewTicker(job.interval)
@@ -147,7 +133,7 @@ func (job *Job) start(wp *Workers) {
 
 		for {
 			select {
-			case <-wp.ctx.Done():
+			case <-workers.ctx.Done():
 				log.Debug("context done", "job", job)
 				return
 			case <-job.stopCh: // Listen for stop signal from stopCh
@@ -155,14 +141,13 @@ func (job *Job) start(wp *Workers) {
 				return
 			case <-ticker.C:
 				log.Debug("requeue", "job", job)
-				submitJob() // Requeue job
+				job.submit(workers) // Requeue job
 			}
 		}
 	}()
 }
 
-// isChannelClosed checks if a given channel has been closed. It returns true
-// if the channel is closed, and false if it is still open.
+// isChannelClosed checks a channel is closed.
 func isChannelClosed(ch <-chan struct{}) bool {
 	select {
 	case <-ch:
@@ -175,8 +160,7 @@ func isChannelClosed(ch <-chan struct{}) bool {
 }
 
 // defaultRecoverFunc is called when a panic occurs in a job's run function
-// and no custom recover function is provided. It logs the panic if logger
-// is defined.
+// and no custom recover function is provided.
 func defaultRecoverFunc(job *Job, v any) {
 	job.logger.Error("job panicked", "job", job, "err", v)
 }

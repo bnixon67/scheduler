@@ -31,8 +31,8 @@ func newWorkers(bufferSize int, logger *slog.Logger) *Workers {
 }
 
 // start launches the specified number of workers.
-func (w *Workers) start(workerCount int) {
-	for i := 0; i < workerCount; i++ {
+func (w *Workers) start(count int) {
+	for i := 0; i < count; i++ {
 		w.wg.Add(1)
 		go w.worker(i)
 	}
@@ -43,7 +43,7 @@ func (w *Workers) submit(job *Job) error {
 	// Stop if the job has reached max executions
 	if job.maxExecutions > 0 && job.executions.Load() >= job.maxExecutions {
 		job.Stop()
-		job.logger.Debug("job reached max executions", "job", job)
+		job.logger.Debug("max executions reached", "job", job)
 		return nil
 	}
 
@@ -60,20 +60,18 @@ func (w *Workers) submit(job *Job) error {
 // worker is a goroutine that continuously processes jobs from the jobQueue.
 // It executes jobs until the context is canceled, ensuring that each job
 // is run safely and any panic during execution is handled gracefully.
-func (w *Workers) worker(workerID int) {
-	w.logger.Debug("started", "workerID", workerID)
-	defer w.logger.Debug("stopped", "workerID", workerID)
-
+func (w *Workers) worker(id int) {
 	defer w.wg.Done()
+
+	w.logger.Debug("started", "workerID", id)
+	defer w.logger.Debug("stopped", "workerID", id)
 
 	for {
 		select {
 		case job := <-w.jobQueueCh:
-			w.logger.Debug("executing",
-				"workerID", workerID,
-				"job", job)
 			// Execute the job and stop if run returns false
-			if !w.executeJob(job) {
+			w.logger.Debug("executing", "workerID", id, "job", job)
+			if !executeJob(job) {
 				job.Stop()
 			}
 		case <-w.ctx.Done():
@@ -84,7 +82,7 @@ func (w *Workers) worker(workerID int) {
 
 // executeJob runs the job's function and recovers from any panics to prevent
 // a failing job from crashing the workers.
-func (w *Workers) executeJob(job *Job) bool {
+func executeJob(job *Job) bool {
 	defer func() {
 		if r := recover(); r != nil && job.recoverFunc != nil {
 			job.recoverFunc(job, r)
@@ -97,7 +95,7 @@ func (w *Workers) executeJob(job *Job) bool {
 	return result
 }
 
-// stop gracefully stops all workers and waits for them to finish.
+// stop stops workers and waits for them to finish.
 func (w *Workers) stop() {
 	w.cancel()  // Signal all workers to stop
 	w.wg.Wait() // Wait for all workers to complete
