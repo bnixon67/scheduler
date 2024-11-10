@@ -9,7 +9,7 @@ import (
 )
 
 // Workers manages the execution of jobs using goroutines.
-// It handles job queuing, context-based cancellation, and synchronization.
+// It handles job queuing, cancellation, and synchronization.
 type Workers struct {
 	jobQueueCh chan *Job
 	ctx        context.Context

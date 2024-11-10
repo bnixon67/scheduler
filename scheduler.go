@@ -1,8 +1,10 @@
 // Copyright (c) 2024 Bill Nixon
 
-// Package scheduler manages and executes jobs periodically. It uses worker
-// goroutines to handle concurrent job executions and provides mechanisms
-// to start, stop, and monitor jobs.
+// Package scheduler provides a framework for managing and executing jobs
+// periodically with configurable options for interval, maximum executions,
+// and panic recovery. It supports concurrent job execution using worker
+// goroutines and provides functionality to start, stop, and retrieve jobs
+// by ID.
 package scheduler
 
 import (
@@ -17,7 +19,17 @@ type Scheduler struct {
 	logger  *slog.Logger
 }
 
-// NewScheduler creates a new Scheduler and starts the workers immediately.
+// NewScheduler creates a Scheduler with a job queue buffer and a specified
+// number of worker goroutines.
+//
+// bufferSize controls the maximum number of jobs that can be queued at
+// once. If the queue is full, new jobs may be rejected until space becomes
+// available.
+//
+// workerCount sets the number of goroutines that process jobs
+// concurrently. More workers allow multiple jobs to run at the same time.
+//
+// opts like WithLogger allow further customization.
 func NewScheduler(bufferSize int, workerCount int, opts ...SchedulerOption) *Scheduler {
 	s := &Scheduler{
 		logger: slog.Default(),
@@ -32,6 +44,7 @@ func NewScheduler(bufferSize int, workerCount int, opts ...SchedulerOption) *Sch
 	return s
 }
 
+// SchedulerOption configures optional settings for a Scheduler.
 type SchedulerOption func(*Scheduler)
 
 // WithLogger sets a custom logger for the Scheduler.
@@ -39,7 +52,7 @@ func WithLogger(logger *slog.Logger) SchedulerOption {
 	return func(s *Scheduler) { s.logger = logger }
 }
 
-// Jobs returns IDs of scheduled jobs.
+// Jobs returns the IDs of the scheduled jobs.
 func (s *Scheduler) Jobs() []string {
 	var ids []string
 
@@ -64,7 +77,9 @@ func (s *Scheduler) Job(id string) *Job {
 }
 
 // AddJob submits a job to the scheduler and stores it in the jobs map.
+//
 // It returns an error if the job could not be added to the job queue.
+//
 // Each job ID must be unique. If a job with a duplicate ID is added,
 // ErrJobIDExists is returned.
 func (s *Scheduler) AddJob(job *Job) error {
@@ -84,7 +99,7 @@ func (s *Scheduler) AddJob(job *Job) error {
 	return nil
 }
 
-// Stop halts the scheduler workers.
+// Stop halts all the workers.
 func (s *Scheduler) Stop() {
 	s.workers.stop()
 }
