@@ -94,7 +94,7 @@ func (job *Job) Interval() time.Duration {
 func (job *Job) Stop() {
 	select {
 	case <-job.stopCh:
-		job.logger.Warn("already stopped", "job", job)
+		job.logger.Info("already stopped", "job", job)
 	default:
 		close(job.stopCh)
 		job.logger.Debug("stopped", "job", job)
@@ -111,21 +111,17 @@ func (job *Job) logSubmitError(err error) {
 	logLevel("failed to submit job", "job", job, "err", err)
 }
 
-// submit is helper function to submit job and handle errors.
-func (job *Job) submit(wp *Workers) {
-	if err := wp.submit(job); err != nil {
-		job.logSubmitError(err)
-	}
-}
-
-// start begins the periodic execution of the Job in a separate goroutine.
-// The Job will continue to execute at each interval until it is stopped,
-// its `run` function returns false, or the context of the workers is canceled.
-func (job *Job) start(workers *Workers) {
+// schedule submits the job to the workers for periodic execution. The Job
+// will execute at each interval until it is stopped, its `run` function
+// returns false, or the context of the workers is canceled.
+func (job *Job) schedule(workers *Workers) {
 	log := job.logger.With("job", job) // Attach job context once
 
 	go func() {
-		job.submit(workers) // Initial job submission
+		// Initial job submission
+		if err := workers.submit(job); err != nil {
+			job.logSubmitError(err)
+		}
 
 		// Start the periodic execution ticker
 		ticker := time.NewTicker(job.interval)
@@ -134,14 +130,16 @@ func (job *Job) start(workers *Workers) {
 		for {
 			select {
 			case <-workers.ctx.Done():
-				log.Debug("context done", "job", job)
+				log.Debug("workers done", "job", job)
 				return
-			case <-job.stopCh: // Listen for stop signal from stopCh
-				log.Debug("stopCh closed", "job", job)
+			case <-job.stopCh:
+				log.Debug("channel closed", "job", job)
 				return
 			case <-ticker.C:
 				log.Debug("requeue", "job", job)
-				job.submit(workers) // Requeue job
+				if err := workers.submit(job); err != nil {
+					job.logSubmitError(err)
+				}
 			}
 		}
 	}()
@@ -163,4 +161,28 @@ func isChannelClosed(ch <-chan struct{}) bool {
 // and no custom recover function is provided.
 func defaultRecoverFunc(job *Job, v any) {
 	job.logger.Error("job panicked", "job", job, "err", v)
+}
+
+// stopIfMaxExecutions stops the job if it has reached its maximum executions.
+// Returns true if the job was stopped, false otherwise.
+func (job *Job) stopIfMaxExecutions() bool {
+	if job.maxExecutions > 0 && job.executions.Load() >= job.maxExecutions {
+		job.Stop()
+		job.logger.Debug("max executions reached", "job", job)
+		return true
+	}
+	return false
+}
+
+// executeJob runs the job's function and recovers from any panics to prevent
+// a failing job from crashing the workers.
+func (job *Job) execute() bool {
+	defer func() {
+		if r := recover(); r != nil && job.recoverFunc != nil {
+			job.recoverFunc(job, r)
+		}
+	}()
+
+	job.executions.Add(1) // Increment the execution count
+	return job.run(job)   // Execute the job
 }
