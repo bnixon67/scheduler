@@ -22,6 +22,12 @@ type Job struct {
 	logger        *slog.Logger
 }
 
+// String returns a human-readable representation of the Job.
+func (job *Job) String() string {
+	return fmt.Sprintf("Job{id: %s, interval: %s, maxExecutions: %d, executions: %d, isStopped: %t}",
+		job.id, job.interval, job.maxExecutions, job.executions.Load(), isChannelClosed(job.stopCh))
+}
+
 // JobOption defines a function type for setting optional parameters in a Job.
 type JobOption func(*Job)
 
@@ -87,12 +93,6 @@ func (job *Job) Stop() {
 		close(job.stopCh)
 		job.logger.Debug("stopped", "job", job)
 	}
-}
-
-// String returns a human-readable representation of the Job.
-func (job *Job) String() string {
-	return fmt.Sprintf("Job{id: %s, interval: %s, isStopped: %t}",
-		job.id, job.interval, isChannelClosed(job.stopCh))
 }
 
 func (job *Job) logSubmitError(err error) {
