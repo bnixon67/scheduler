@@ -91,8 +91,8 @@ func (w *Workers) executeJob(job *Job) bool {
 		}
 	}()
 
-	result := job.run(job) // Execute the job
 	job.executions.Add(1)  // Increment the execution count
+	result := job.run(job) // Execute the job
 
 	return result
 }
