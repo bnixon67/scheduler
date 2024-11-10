@@ -95,7 +95,7 @@ func (job *Job) String() string {
 		job.id, job.interval, isChannelClosed(job.stopCh))
 }
 
-func (job *Job) handleSubmitError(err error) {
+func (job *Job) logSubmitError(err error) {
 	logLevel := job.logger.Error
 	if errors.Is(err, ErrWorkersStopping) {
 		logLevel = job.logger.Info
@@ -112,7 +112,7 @@ func (job *Job) start(wp *Workers) {
 	// Helper function
 	submitJob := func() {
 		if err := wp.submit(job); err != nil {
-			job.handleSubmitError(err)
+			job.logSubmitError(err)
 		}
 	}
 
