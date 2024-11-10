@@ -464,14 +464,14 @@ func TestSchedulerWithJobPanic(t *testing.T) {
 // TestSchedulerWithMaxExecutions verifies the scheduler handles max executions
 // for a job.
 func TestSchedulerWithMaxExecutions(t *testing.T) {
-	var executions atomic.Int64
+	var executions atomic.Uint64
 
 	s := scheduler.NewScheduler(5, 2)
 
 	// Use t.Cleanup to ensure resources are cleaned up
 	t.Cleanup(s.Stop)
 
-	wantExecutions := int64(3)
+	wantExecutions := uint64(3)
 
 	job := scheduler.NewJob(
 		"test",

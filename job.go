@@ -16,8 +16,8 @@ type Job struct {
 	interval      time.Duration
 	run           func(*Job) bool
 	recoverFunc   func(*Job, any)
-	maxExecutions int64         // Max executions; 0 for indefinite
-	executions    atomic.Int64  // Current number of executions
+	maxExecutions uint64        // Max executions; 0 for indefinite
+	executions    atomic.Uint64 // Current number of executions
 	stopCh        chan struct{} // Channel to signal the job to stop
 	logger        *slog.Logger
 }
@@ -40,7 +40,7 @@ func WithRecoverFunc(recoverFunc func(*Job, any)) JobOption {
 
 // WithMaxExecutions sets a maximum number of executions for the job.
 // If 0, run indefinitely.
-func WithMaxExecutions(n int64) JobOption {
+func WithMaxExecutions(n uint64) JobOption {
 	return func(j *Job) {
 		j.maxExecutions = n
 	}
