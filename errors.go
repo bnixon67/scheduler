@@ -8,6 +8,6 @@ var (
 	ErrJobIDExists     = errors.New("job ID already exists")
 	ErrJobIsNil        = errors.New("job is nil")
 	ErrWorkersStopping = errors.New("workers are stopping")
-	ErrJobQueueIsFull  = errors.New("job queue is full")
+	ErrJobQueueFull    = errors.New("job queue full")
 	ErrJobNotFound     = errors.New("job not found")
 )

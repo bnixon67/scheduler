@@ -91,7 +91,8 @@ func (s *Scheduler) AddJob(job *Job) error {
 		return ErrJobIDExists
 	}
 
-	job.schedule(s.workers)
+	//job.schedule(s.workers)
+	s.workers.schedule(job)
 	return nil
 }
 

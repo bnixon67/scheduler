@@ -4,7 +4,6 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -100,50 +99,6 @@ func (job *Job) Stop() {
 	job.logger.Debug("stopped", "job", job)
 }
 
-// logSummitError is a helper to log submit errors based on error type.
-func (job *Job) logSubmitError(err error) {
-	logLevel := job.logger.Error
-	if errors.Is(err, ErrWorkersStopping) {
-		logLevel = job.logger.Info
-	}
-
-	logLevel("failed to submit job", "job", job, "err", err)
-}
-
-// schedule submits the job to the workers for periodic execution. The Job
-// will execute at each interval until it is stopped, its `run` function
-// returns false, or the context of the workers is canceled.
-func (job *Job) schedule(workers *Workers) {
-	log := job.logger.With("job", job) // Attach job context once
-
-	go func() {
-		// Initial job submission
-		if err := workers.submit(job); err != nil {
-			job.logSubmitError(err)
-		}
-
-		// Start the periodic execution ticker
-		ticker := time.NewTicker(job.interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-workers.ctx.Done():
-				log.Debug("workers done", "job", job)
-				return
-			case <-job.ctx.Done():
-				log.Debug("job done", "job", job)
-				return
-			case <-ticker.C:
-				log.Debug("requeue", "job", job)
-				if err := workers.submit(job); err != nil {
-					job.logSubmitError(err)
-				}
-			}
-		}
-	}()
-}
-
 // isStopped checks if the job's context has been canceled.
 func (job *Job) isStopped() bool {
 	select {
@@ -157,18 +112,7 @@ func (job *Job) isStopped() bool {
 // defaultRecoverFunc is called when a panic occurs in a job's run function
 // and no custom recover function is provided.
 func defaultRecoverFunc(job *Job, v any) {
-	job.logger.Error("job panicked", "job", job, "err", v)
-}
-
-// stopIfMaxExecutions stops the job if it has reached its maximum executions.
-// Returns true if the job was stopped, false otherwise.
-func (job *Job) stopIfMaxExecutions() bool {
-	if job.maxExecutions > 0 && job.executions.Load() >= job.maxExecutions {
-		job.Stop()
-		job.logger.Debug("max executions reached", "job", job)
-		return true
-	}
-	return false
+	job.logger.Error("job panicked", "job", job, "error", v)
 }
 
 // executeJob runs the job's function and recovers from any panics to prevent
@@ -179,6 +123,11 @@ func (job *Job) execute() bool {
 			job.recoverFunc(job, r)
 		}
 	}()
+
+	if job.maxExecutions > 0 && job.executions.Load() >= job.maxExecutions {
+		job.logger.Debug("max executions reached", "job", job)
+		return false
+	}
 
 	job.executions.Add(1) // Increment the execution count
 	return job.run(job)   // Execute the job

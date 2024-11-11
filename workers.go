@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // Workers manages the execution of jobs using goroutines.
@@ -38,20 +39,45 @@ func (w *Workers) start(count int) {
 	}
 }
 
-// submit adds the job to queue if the job hasn't reached max executions.
 func (w *Workers) submit(job *Job) error {
-	if job.stopIfMaxExecutions() {
-		return nil
-	}
-
 	select {
-	case <-w.ctx.Done():
-		return ErrWorkersStopping
 	case w.jobQueueCh <- job:
-		return nil
+		return nil // job queued
 	default:
-		return ErrJobQueueIsFull
+		return ErrJobQueueFull
 	}
+}
+
+func (w *Workers) schedule(job *Job) {
+	log := job.logger.With("job", job)
+
+	go func() {
+		// Initial submission
+		if err := w.submit(job); err != nil {
+			log.Error("failed to submit", "error", err)
+		}
+
+		ticker := time.NewTicker(job.interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-w.ctx.Done():
+				log.Debug("workers done")
+				return
+			case <-job.ctx.Done():
+				log.Debug("job done")
+				return
+			case <-ticker.C:
+				// Re-queue
+				if err := w.submit(job); err != nil {
+					log.Error("failed to submit",
+						"error", err)
+					return
+				}
+			}
+		}
+	}()
 }
 
 // worker is a goroutine that continuously processes jobs from the jobQueue.
