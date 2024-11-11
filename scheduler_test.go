@@ -28,7 +28,7 @@ func TestSchedulerJob(t *testing.T) {
 	)
 	s.AddJob(wantJob)
 
-	gotJob := s.Job(jobID)
+	gotJob := s.GetJob(jobID)
 
 	if gotJob != wantJob {
 		t.Errorf("\ngot  %v,\nwant %v\nfor s.Job()",
@@ -36,7 +36,7 @@ func TestSchedulerJob(t *testing.T) {
 	}
 
 	// Verify non-existent job ID returns nil.
-	gotJob = s.Job("not" + jobID)
+	gotJob = s.GetJob("not" + jobID)
 	if gotJob != nil {
 		t.Errorf("\ngot  %v,\nwant %v\nfor s.Job()",
 			gotJob, nil)
@@ -241,7 +241,7 @@ func TestSchedulerJobs(t *testing.T) {
 	s.AddJob(job1)
 	s.AddJob(job2)
 
-	gotJobIDs := s.Jobs()
+	gotJobIDs := s.JobIDs()
 
 	gotNum := len(gotJobIDs)
 	wantNum := 2
@@ -404,7 +404,7 @@ func TestSchedulerAddJobNil(t *testing.T) {
 	t.Cleanup(s.Stop)
 
 	gotErr := s.AddJob(nil)
-	wantErr := scheduler.ErrJobIsNil
+	wantErr := scheduler.ErrNilJob
 	if gotErr != wantErr {
 		t.Errorf("got error %q, want %q", gotErr, wantErr)
 	}
@@ -424,13 +424,13 @@ func TestSchedulerWithJobPanic(t *testing.T) {
 
 	job := scheduler.NewJob(
 		"test",
-		1*time.Second,
+		500*time.Millisecond,
 		func(*scheduler.Job) bool {
 			executions.Add(1)
 			panic("panic job")
 			return true
 		},
-		scheduler.WithRecoverFunc(func(job *scheduler.Job, v any) {
+		scheduler.WithRecoveryHandler(func(job *scheduler.Job, v any) {
 			panics.Add(1)
 		}),
 	)
@@ -458,7 +458,6 @@ func TestSchedulerWithJobPanic(t *testing.T) {
 		t.Errorf("want executions %d to match panics %d",
 			gotExecutions, gotPanics)
 	}
-
 }
 
 // TestSchedulerWithMaxExecutions verifies the scheduler handles max executions

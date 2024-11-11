@@ -48,12 +48,12 @@ func NewScheduler(bufferSize int, workerCount int, opts ...SchedulerOption) *Sch
 type SchedulerOption func(*Scheduler)
 
 // WithLogger sets a custom logger for the Scheduler.
-func WithLogger(logger *slog.Logger) SchedulerOption {
-	return func(s *Scheduler) { s.logger = logger }
+func WithLogger(l *slog.Logger) SchedulerOption {
+	return func(s *Scheduler) { s.logger = l }
 }
 
-// Jobs returns the IDs of the scheduled jobs.
-func (s *Scheduler) Jobs() []string {
+// JobIDs returns the IDs of the scheduled jobs.
+func (s *Scheduler) JobIDs() []string {
 	var ids []string
 
 	s.jobs.Range(func(key, value interface{}) bool {
@@ -66,8 +66,8 @@ func (s *Scheduler) Jobs() []string {
 	return ids
 }
 
-// Job retrieves a job by its ID.
-func (s *Scheduler) Job(id string) *Job {
+// GetJob retrieves a job by its ID.
+func (s *Scheduler) GetJob(id string) *Job {
 	value, ok := s.jobs.Load(id)
 	if !ok {
 		return nil
@@ -80,7 +80,7 @@ func (s *Scheduler) Job(id string) *Job {
 // It returns an error if the job ID already exists.
 func (s *Scheduler) AddJob(job *Job) error {
 	if job == nil {
-		return ErrJobIsNil
+		return ErrNilJob
 	}
 
 	// Assign Scheduler's logger to Job
@@ -92,7 +92,7 @@ func (s *Scheduler) AddJob(job *Job) error {
 	}
 
 	//job.schedule(s.workers)
-	s.workers.schedule(job)
+	s.workers.scheduleJob(job)
 	return nil
 }
 

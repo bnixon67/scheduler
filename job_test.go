@@ -33,24 +33,26 @@ func TestJobNewJobRunFunc(t *testing.T) {
 
 // TestJobString verifies the String method.
 func TestJobString(t *testing.T) {
-	want := "Job{id: test, interval: 1s, maxExecutions: 0, executions: 0, isStopped: false}"
-
 	job := scheduler.NewJob(
 		"test",
 		1*time.Second,
 		func(*scheduler.Job) bool { return true },
 	)
 
-	if job.String() != want {
+	got := job.String()
+	want := "Job{id: test, interval: 1s, maxExecutions: 0, executions: 0, stopOnPanic: false, isStopped: false}"
+	if got != want {
 		t.Errorf("\ngot  %v,\nwant %v\nfor job.String()",
-			want, job.String())
+			got, want)
 	}
 
 	job.Stop()
-	want = "Job{id: test, interval: 1s, maxExecutions: 0, executions: 0, isStopped: true}"
-	if job.String() != want {
+
+	got = job.String()
+	want = "Job{id: test, interval: 1s, maxExecutions: 0, executions: 0, stopOnPanic: false, isStopped: true}"
+	if got != want {
 		t.Errorf("\ngot  %v,\nwant %v\nfor job.String()",
-			want, job.String())
+			got, want)
 	}
 }
 

@@ -35,10 +35,11 @@ func newWorkers(bufferSize int, logger *slog.Logger) *Workers {
 func (w *Workers) start(count int) {
 	for i := 0; i < count; i++ {
 		w.wg.Add(1)
-		go w.worker(i)
+		go w.runWorker(i)
 	}
 }
 
+// submit enqueues a Job into the Workers' job queue for execution.
 func (w *Workers) submit(job *Job) error {
 	select {
 	case w.jobQueueCh <- job:
@@ -48,7 +49,11 @@ func (w *Workers) submit(job *Job) error {
 	}
 }
 
-func (w *Workers) schedule(job *Job) {
+// scheduleJob schedules a Job for periodic execution.
+// It starts a goroutine that initially submits the job to the Workers'
+// job queue, and then re-submits it at each specified interval. The job
+// continues to be scheduled until it is stopped or the Workers are stopped.
+func (w *Workers) scheduleJob(job *Job) {
 	log := job.logger.With("job", job)
 
 	go func() {
@@ -65,7 +70,7 @@ func (w *Workers) schedule(job *Job) {
 			case <-w.ctx.Done():
 				log.Debug("workers done")
 				return
-			case <-job.ctx.Done():
+			case <-job.cancelCtx.Done():
 				log.Debug("job done")
 				return
 			case <-ticker.C:
@@ -80,10 +85,10 @@ func (w *Workers) schedule(job *Job) {
 	}()
 }
 
-// worker is a goroutine that continuously processes jobs from the jobQueue.
+// runWorker is a goroutine that continuously processes jobs from the jobQueue.
 // It executes jobs until the context is canceled, ensuring that each job
 // is run safely and any panic during execution is handled gracefully.
-func (w *Workers) worker(id int) {
+func (w *Workers) runWorker(id int) {
 	defer w.wg.Done()
 
 	w.logger.Debug("started", "workerID", id)
