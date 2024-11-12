@@ -7,11 +7,11 @@ import (
 	"github.com/bnixon67/scheduler"
 )
 
-// TestJobNewJobInterval verifies that NewJob panics on invalid interval.
-func TestJobNewJobInterval(t *testing.T) {
+// TestNewJobIntervalZero verifies that NewJob panics on zero interval.
+func TestNewJobIntervalZero(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Errorf("want NewJob to panic on invalid interval, but it did not")
+			t.Errorf("NewJob did not panic on invalid interval")
 		}
 	}()
 
@@ -19,15 +19,27 @@ func TestJobNewJobInterval(t *testing.T) {
 	scheduler.NewJob("test", 0, func(*scheduler.Job) bool { return true })
 }
 
-// TestJobNewJobRunFunc verifies that NewJob panics on invalid run function.
-func TestJobNewJobRunFunc(t *testing.T) {
+// TestNewJobIntervalNegative verifies that NewJob panics on negative interval.
+func TestNewJobIntervalNegative(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Errorf("want NewJob to panic on nil run function, but it did not")
+			t.Errorf("NewJob did not panic on negative interval")
 		}
 	}()
 
-	// This should panic due to nil run function
+	// This should panic due to non-positive interval
+	scheduler.NewJob("test", -1*time.Second, func(*scheduler.Job) bool { return true })
+}
+
+// TestNewJobRunNil verifies that NewJob panics on nil run function.
+func TestNewJobRunNil(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("NewJob did not panic on nil run function")
+		}
+	}()
+
+	// This should panic due to non-positive interval
 	scheduler.NewJob("test", time.Second, nil)
 }
 
@@ -35,12 +47,12 @@ func TestJobNewJobRunFunc(t *testing.T) {
 func TestJobString(t *testing.T) {
 	job := scheduler.NewJob(
 		"test",
-		1*time.Second,
+		time.Second,
 		func(*scheduler.Job) bool { return true },
 	)
 
 	got := job.String()
-	want := "Job{id: test, interval: 1s, maxExecutions: 0, executions: 0, stopOnPanic: false, isStopped: false}"
+	want := "Job{id: test, interval: 1s, stopOnPanic: false, maxExecutions: 0, executions: 0, isStopped: false}"
 	if got != want {
 		t.Errorf("\ngot  %v,\nwant %v\nfor job.String()",
 			got, want)
@@ -49,7 +61,7 @@ func TestJobString(t *testing.T) {
 	job.Stop()
 
 	got = job.String()
-	want = "Job{id: test, interval: 1s, maxExecutions: 0, executions: 0, stopOnPanic: false, isStopped: true}"
+	want = "Job{id: test, interval: 1s, stopOnPanic: false, maxExecutions: 0, executions: 0, isStopped: true}"
 	if got != want {
 		t.Errorf("\ngot  %v,\nwant %v\nfor job.String()",
 			got, want)
@@ -69,17 +81,16 @@ func TestJobID(t *testing.T) {
 	got := job.ID()
 	want := jobID
 	if got != want {
-		t.Errorf("got %v, want %v for job.ID()", got, want)
+		t.Errorf("ID() = %q, want %q", got, want)
 	}
 }
 
 // TestJobInterval verifies that Interval() correctly returns the Job Interval.
 func TestJobInterval(t *testing.T) {
-	jobID := "test"
 	jobInterval := 42 * time.Second
 
 	job := scheduler.NewJob(
-		jobID,
+		"test",
 		jobInterval,
 		func(*scheduler.Job) bool { return true },
 	)
@@ -87,6 +98,6 @@ func TestJobInterval(t *testing.T) {
 	got := job.Interval()
 	want := jobInterval
 	if got != want {
-		t.Errorf("got %v, want %v for job.Interval()", got, want)
+		t.Errorf("Interval() = %v, want %v", got, want)
 	}
 }

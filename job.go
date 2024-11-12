@@ -38,25 +38,6 @@ type Job struct {
 	cancelFunc    context.CancelFunc
 }
 
-// String returns a human-readable representation of the Job.
-func (j *Job) String() string {
-	return fmt.Sprintf(
-		"Job{"+
-			"id: %s, "+
-			"interval: %s, "+
-			"maxExecutions: %d, "+
-			"executions: %d, "+
-			"stopOnPanic: %t, "+
-			"isStopped: %t}",
-		j.id,
-		j.interval,
-		j.maxExecutions,
-		j.executions.Load(),
-		j.stopOnPanic,
-		j.IsStopped(),
-	)
-}
-
 // NewJob creates and returns a pointer to a job that runs periodically
 // when addded to a Scheduler. The job includes an ID, that must be unique
 // within each Scheduler, a positive interval between executions, and a
@@ -92,6 +73,25 @@ func NewJob(id string, interval time.Duration, run func(*Job) bool, opts ...JobO
 	}
 
 	return job
+}
+
+// String returns a human-readable representation of the Job.
+func (j *Job) String() string {
+	return fmt.Sprintf(
+		"Job{"+
+			"id: %s, "+
+			"interval: %s, "+
+			"stopOnPanic: %t, "+
+			"maxExecutions: %d, "+
+			"executions: %d, "+
+			"isStopped: %t}",
+		j.id,
+		j.interval,
+		j.stopOnPanic,
+		j.maxExecutions,
+		j.executions.Load(),
+		j.IsStopped(),
+	)
 }
 
 // JobOption configures optional Job parameters.
@@ -149,7 +149,7 @@ func (j *Job) IsStopped() bool {
 // defaultRecoveryHandler is called when a panic occurs in a job's run function
 // and no custom recover function is provided.
 func defaultRecoveryHandler(j *Job, v any) {
-	j.logger.Error("job panicked", "job", j, "error", v)
+	j.logger.Error("job panicked", "job", j, "value", v)
 }
 
 // hasReachedMaxExecutions checks if the Job has reached its maximum number

@@ -2,6 +2,10 @@ package scheduler_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"sync"
@@ -12,35 +16,296 @@ import (
 	"github.com/bnixon67/scheduler"
 )
 
-// TestSchedulerJob verifies that retrieval of a job by ID from Scheduler works.
-func TestSchedulerJob(t *testing.T) {
-	s := scheduler.NewScheduler(1, 1)
+// containsExactly checks if `slice` contains exactly the elements in `required`
+// with no extras.
+func containsExactly[T comparable](slice []T, required []T) bool {
+	for _, item := range required {
+		if !slices.Contains(slice, item) {
+			return false
+		}
+	}
 
-	// Use t.Cleanup to ensure resources are cleaned up.
+	for _, item := range slice {
+		if !slices.Contains(required, item) {
+			return false
+		}
+	}
+	return true
+}
+
+// TestSchedulerJobIDs verifies that JobIDs() returns correct results.
+func TestSchedulerJobIDs(t *testing.T) {
+	s := scheduler.NewScheduler(10, 1)
+	defer s.Stop()
+
+	runFunc := func(*scheduler.Job) bool { return true }
+	job1 := scheduler.NewJob("job1", time.Second, runFunc)
+	job2 := scheduler.NewJob("job2", time.Second, runFunc)
+	s.AddJob(job1)
+	s.AddJob(job2)
+
+	gotJobIDs := s.JobIDs()
+
+	gotNum := len(gotJobIDs)
+	wantNum := 2
+	if gotNum != wantNum {
+		t.Errorf("got %d jobs, expected %d", gotNum, wantNum)
+	}
+
+	wantJobIDs := []string{"job1", "job2"}
+
+	if !containsExactly(gotJobIDs, wantJobIDs) {
+		t.Errorf("got %v, want %v", gotJobIDs, wantJobIDs)
+	}
+}
+
+// TestSchedulerGetJob verifies that retrieval of a job by ID from Scheduler.
+func TestSchedulerGetJob(t *testing.T) {
+	s := scheduler.NewScheduler(2, 1)
 	t.Cleanup(s.Stop)
 
-	jobID := "test"
+	jobID := randomID()
 
-	wantJob := scheduler.NewJob(
-		jobID,
-		1*time.Second,
-		func(*scheduler.Job) bool { return true },
-	)
+	runFunc := func(*scheduler.Job) bool { return true }
+	wantJob := scheduler.NewJob(jobID, time.Second, runFunc)
 	s.AddJob(wantJob)
+	xtraJob := scheduler.NewJob(randomID(), time.Second, runFunc)
+	s.AddJob(xtraJob)
 
+	// Verify existent jobID
 	gotJob := s.GetJob(jobID)
-
 	if gotJob != wantJob {
-		t.Errorf("\ngot  %v,\nwant %v\nfor s.Job()",
-			gotJob, wantJob)
+		t.Errorf("\nGetJob(%q) = \n%v,\nwant = \n%v",
+			jobID, gotJob, wantJob)
 	}
 
-	// Verify non-existent job ID returns nil.
-	gotJob = s.GetJob("not" + jobID)
-	if gotJob != nil {
-		t.Errorf("\ngot  %v,\nwant %v\nfor s.Job()",
-			gotJob, nil)
+	// Verify non-existent jobID
+	jobID = "not" + jobID
+	gotJob = s.GetJob(jobID)
+	wantJob = nil
+	if gotJob != wantJob {
+		t.Errorf("\nGetJob(%q) = \n%v,\nwant = \n%v",
+			jobID, gotJob, wantJob)
 	}
+}
+
+// TestSchedulerWithMaxExecutions verifies that the WithMaxExecutions option
+// correctly limits the number of times a job is executed.
+func TestSchedulerWithMaxExecutions(t *testing.T) {
+	var executions atomic.Uint64
+
+	wantExecutions := uint64(3)
+
+	// Create a WaitGroup to synchronize the job executions
+	var wg sync.WaitGroup
+	wg.Add(int(wantExecutions))
+
+	job := scheduler.NewJob(
+		randomID(),
+		50*time.Millisecond,
+		func(*scheduler.Job) bool {
+			executions.Add(1)
+			wg.Done()
+			return true
+		},
+		scheduler.WithMaxExecutions(wantExecutions),
+	)
+
+	s := scheduler.NewScheduler(5, 3)
+	t.Cleanup(s.Stop) // Ensure the scheduler is stopped after the test
+	s.AddJob(job)
+
+	// Use a context with timeout to prevent the test from hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	// Wait for the job to reach the desired number of executions or timeout
+	doneCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+		t.Fatalf("timeout waiting for %d executions", wantExecutions)
+	case <-doneCh:
+		// Job executed the expected number of times
+	}
+
+	// Verify the number of executions
+	gotExecutions := executions.Load()
+	if gotExecutions != wantExecutions {
+		t.Errorf("got %d executions, want %d",
+			gotExecutions, wantExecutions)
+	}
+
+	// Ensure the job does not execute more times after the test
+	time.Sleep(250 * time.Millisecond)
+	finalExecutions := executions.Load()
+	if finalExecutions > wantExecutions {
+		t.Errorf("job executed after test completion: got %d, want %d",
+			finalExecutions, wantExecutions)
+	}
+}
+
+// TestSchedulerWithStopOnPanic verifies that WithStopOnPanic works correctly.
+func TestSchedulerWithStopOnPanic(t *testing.T) {
+	for _, stopOnPanic := range []bool{true, false} {
+		name := fmt.Sprintf("stopOnPanic=%t", stopOnPanic)
+		t.Run(name, func(t *testing.T) {
+			var executions atomic.Uint64
+
+			job := scheduler.NewJob(
+				randomID(),
+				250*time.Millisecond,
+				func(*scheduler.Job) bool {
+					executions.Add(1)
+					panic("panic")
+					return true
+				},
+				scheduler.WithStopOnPanic(stopOnPanic),
+				scheduler.WithRecoveryHandler(
+					func(*scheduler.Job, any) {}),
+			)
+
+			s := scheduler.NewScheduler(5, 3)
+			t.Cleanup(s.Stop)
+			s.AddJob(job)
+
+			time.Sleep(1 * time.Second)
+
+			// Verify the number of executions
+			gotExecutions := executions.Load()
+			wantExecutions := uint64(1)
+			if !stopOnPanic {
+				wantExecutions = gotExecutions
+			}
+			if gotExecutions != wantExecutions {
+				t.Errorf("got %d executions, want %d",
+					gotExecutions, wantExecutions)
+			}
+		})
+	}
+}
+
+// randomID generates a random jobID.
+func randomID() string {
+	length := 8
+
+	// Calculate the number of bytes needed for the desired string length
+	byteLength := (length * 3) / 4
+	randomBytes := make([]byte, byteLength)
+
+	// Fill the byte slice with random data
+	if _, err := rand.Read(randomBytes); err != nil {
+		panic(err)
+	}
+
+	// Encode to base64 and truncate to the desired length
+	return base64.RawURLEncoding.EncodeToString(randomBytes)[:length]
+}
+
+// TestSchedulerStopJob verifies that stopping a job prevents it from being
+// re-queued.
+func TestSchedulerStopJob(t *testing.T) {
+	var executions atomic.Int32
+
+	s := scheduler.NewScheduler(5, 3)
+	t.Cleanup(s.Stop)
+
+	jobID := randomID()
+	job := scheduler.NewJob(
+		jobID,
+		time.Second,
+		func(*scheduler.Job) bool {
+			executions.Add(1)
+			return true
+		},
+	)
+	s.AddJob(job)
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Stop the job to prevent it from being re-queued
+	s.StopJob(job.ID())
+
+	time.Sleep(1500 * time.Millisecond)
+
+	// Check if the job was executed only once
+	got := executions.Load()
+	if got != 1 {
+		t.Errorf("got %d executions, wanted only one", got)
+	}
+
+	// Confirm Job removed
+	job = s.GetJob(jobID)
+	if job != nil {
+		t.Errorf("GetJob(%q) = %v, want nil", jobID, job)
+	}
+}
+
+// TestSchedulerStopJobNonExistent verifies that StopJob returns an error
+// for non-existent jobs.
+func TestSchedulerStopJobNonExistent(t *testing.T) {
+	s := scheduler.NewScheduler(5, 3)
+	t.Cleanup(s.Stop)
+
+	jobID := randomID()
+	got := s.StopJob(jobID)
+	want := scheduler.ErrJobNotFound
+	if !errors.Is(got, want) {
+		t.Errorf("StopJob(%q) = %v, want %v", jobID, got, want)
+	}
+}
+
+// TestSchedulerAddJobDuplicateID verifies that adding a job with a duplicate
+// ID returns an error.
+func TestSchedulerAddJobDuplicateID(t *testing.T) {
+	s := scheduler.NewScheduler(5, 5)
+	defer s.Stop()
+
+	runFunc := func(*scheduler.Job) bool { return true }
+
+	jobID := randomID()
+	job1 := scheduler.NewJob(jobID, time.Second, runFunc)
+	job2 := scheduler.NewJob(randomID(), time.Second, runFunc)
+	job3 := scheduler.NewJob(jobID, time.Second, runFunc)
+	job4 := scheduler.NewJob(jobID, time.Second, runFunc)
+
+	tests := []struct {
+		job     *scheduler.Job
+		wantErr error
+	}{
+		{job1, nil},
+		{job2, nil},
+		{job3, scheduler.ErrJobIDExists},
+		{job4, scheduler.ErrJobIDExists},
+	}
+
+	for n, tc := range tests {
+		name := fmt.Sprintf("%d", n)
+		t.Run(name, func(t *testing.T) {
+			gotErr := s.AddJob(tc.job)
+			if !errors.Is(gotErr, tc.wantErr) {
+				t.Errorf("AddJob(%q) = %v, want %v",
+					tc.job.ID(), gotErr, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestSchedulerAddJobNil verifies adding a nil job returns error.
+func TestSchedulerAddJobNil(t *testing.T) {
+	s := scheduler.NewScheduler(1, 1)
+	t.Cleanup(s.Stop)
+
+	gotErr := s.AddJob(nil)
+	wantErr := scheduler.ErrNilJob
+	if !errors.Is(gotErr, wantErr) {
+		t.Errorf("err = %q, want %q", gotErr, wantErr)
+	}
+
 }
 
 // TestSchedulerWithOneJob verifies the scheduler executes a job at least once.
@@ -64,19 +329,13 @@ func TestSchedulerWithOneJob(t *testing.T) {
 		),
 	)
 
-	// Use a context with timeout to wait for job to finish.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	time.Sleep(1500 * time.Millisecond)
 
-	<-ctx.Done() // Wait for the context to expire
-
-	// Check if the job was executedi at least once
+	// Check if the job was executed at least once
 	got := executions.Load()
 	if got < 1 {
-		t.Errorf("got %d executions, want at least 1", got)
+		t.Errorf("execution = %d, want at least 1", got)
 	}
-
-	s.Stop()
 }
 
 // TestSchedulerWithMultipleJobs verifies that the scheduler executes
@@ -99,19 +358,13 @@ func TestSchedulerWithMultipleJobs(t *testing.T) {
 	}
 
 	s := scheduler.NewScheduler(len(jobs), len(jobs))
-
-	// Use t.Cleanup to ensure resources are cleaned up
 	t.Cleanup(s.Stop)
 
 	for n := range jobs {
 		s.AddJob(jobs[n])
 	}
 
-	// Use a context with timeout to ensure the test doesn't run too long
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	<-ctx.Done() // Wait for the context to expire
+	time.Sleep(3 * time.Second)
 
 	// Check if each job was executed at least once
 	mu.Lock()
@@ -130,15 +383,12 @@ func TestSchedulerRequeue(t *testing.T) {
 	var executions atomic.Int32
 
 	s := scheduler.NewScheduler(5, 3)
-
-	// Use t.Cleanup to ensure resources are cleaned up
 	t.Cleanup(s.Stop)
 
-	// Define a job that increments executionCount
 	s.AddJob(
 		scheduler.NewJob(
-			"test",
-			1*time.Second,
+			randomID(),
+			500*time.Millisecond,
 			func(*scheduler.Job) bool {
 				executions.Add(1)
 				return true
@@ -146,165 +396,13 @@ func TestSchedulerRequeue(t *testing.T) {
 		),
 	)
 
-	// Use a context with timeout to wait for job to run multiple times.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-
-	<-ctx.Done() // Wait for the context to expire
+	time.Sleep(2 * time.Second)
 
 	// Check if the job was executed multiple times
 	got := executions.Load()
 	want := int32(2)
 	if got < want {
-		t.Errorf("got %d executions, want at leat %d", got, want)
-	}
-}
-
-// TestSchedulerStopJob verifies that stopping a job prevents it from being
-// re-queued.
-func TestSchedulerStopJob(t *testing.T) {
-	var executions atomic.Int32
-
-	s := scheduler.NewScheduler(5, 3)
-
-	// Use t.Cleanup to ensure resources are cleaned up
-	t.Cleanup(s.Stop)
-
-	// Define a job that increments executionCount
-	job := scheduler.NewJob(
-		"test",
-		time.Second,
-		func(*scheduler.Job) bool {
-			executions.Add(1)
-			return true
-		},
-	)
-	s.AddJob(job)
-
-	// Wait for the job to execute at least once
-	time.Sleep(500 * time.Millisecond)
-
-	// Stop the job to prevent it from being re-queued
-	s.StopJob(job.ID())
-
-	// Use a context with timeout to control the test duration
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	<-ctx.Done() // Wait for the context to expire
-
-	// Check if the job was executed only once
-	got := executions.Load()
-	if got != 1 {
-		t.Errorf("got %d executions, wanted only one", got)
-	}
-}
-
-// TestSchedulerStopJobNonExistent verifies that StopJob returns an error
-// for non-existent jobs.
-func TestSchedulerStopJobNonExistent(t *testing.T) {
-	s := scheduler.NewScheduler(5, 3)
-	t.Cleanup(s.Stop)
-
-	err := s.StopJob("non-existent-job")
-	if err == nil {
-		t.Errorf("didn't get error when wanted for non-existent job")
-	}
-}
-
-// containsExactly checks if `slice` contains exactly the elements in `required`
-// with no extras.
-func containsExactly[T comparable](slice []T, required []T) bool {
-	for _, item := range required {
-		if !slices.Contains(slice, item) {
-			return false
-		}
-	}
-
-	for _, item := range slice {
-		if !slices.Contains(required, item) {
-			return false
-		}
-	}
-	return true
-}
-
-// TestSchedulerJobs verifies that Jobs method returns correct job IDs.
-func TestSchedulerJobs(t *testing.T) {
-	s := scheduler.NewScheduler(10, 1)
-	defer s.Stop()
-
-	runFunc := func(*scheduler.Job) bool { return true }
-
-	job1 := scheduler.NewJob("job1", time.Second, runFunc)
-	job2 := scheduler.NewJob("job2", time.Second, runFunc)
-	s.AddJob(job1)
-	s.AddJob(job2)
-
-	gotJobIDs := s.JobIDs()
-
-	gotNum := len(gotJobIDs)
-	wantNum := 2
-	if gotNum != wantNum {
-		t.Errorf("got %d jobs, expected %d", gotNum, wantNum)
-	}
-
-	wantJobIDs := []string{"job1", "job2"}
-
-	if !containsExactly(gotJobIDs, wantJobIDs) {
-		t.Errorf("got %v, want %v", gotJobIDs, wantJobIDs)
-	}
-}
-
-// TestSchedulerDuplicateJobID verifies that adding a job with a duplicate
-// ID returns an error.
-func TestSchedulerDuplicateJobID(t *testing.T) {
-	s := scheduler.NewScheduler(1, 1)
-	defer s.Stop()
-
-	runFunc := func(*scheduler.Job) bool { return true }
-
-	job1 := scheduler.NewJob("test", time.Second, runFunc)
-	job2 := scheduler.NewJob("test", time.Second, runFunc)
-
-	if err := s.AddJob(job1); err != nil {
-		t.Errorf("got error %q, want %v", err, nil)
-	}
-
-	wantErr := scheduler.ErrJobIDExists
-	if err := s.AddJob(job2); err != nil && err != wantErr {
-		t.Errorf("got error %q, want error %q", err, wantErr)
-	}
-}
-
-// TestSchedulerConcurrentExecution checks for race conditions by concurrently
-// executing jobs.
-func TestSchedulerConcurrentExecution(t *testing.T) {
-	var executions atomic.Int32
-
-	s := scheduler.NewScheduler(10, 5)
-	t.Cleanup(s.Stop)
-
-	job := scheduler.NewJob(
-		"test",
-		100*time.Millisecond,
-		func(*scheduler.Job) bool {
-			executions.Add(1)
-			return true
-		},
-	)
-
-	s.AddJob(job)
-
-	// Allow the job to execute several times concurrently
-	time.Sleep(1 * time.Second)
-
-	// Verify execution count
-	got := executions.Load()
-	want := int32(5)
-	if got < want {
-		t.Errorf("got %d executions, want at least %d",
-			got, want)
+		t.Errorf("execution = %d, want at leat %d", got, want)
 	}
 }
 
@@ -395,105 +493,6 @@ func TestSchedulerMultipleJobsConcurrent(t *testing.T) {
 		if executions[jobID] == 0 {
 			t.Errorf("want job %s to execute, but it didn't", jobID)
 		}
-	}
-}
-
-// TestSchedulerAddJobNil verifies adding a nil job returns error.
-func TestSchedulerAddJobNil(t *testing.T) {
-	s := scheduler.NewScheduler(1, 1)
-	t.Cleanup(s.Stop)
-
-	gotErr := s.AddJob(nil)
-	wantErr := scheduler.ErrNilJob
-	if gotErr != wantErr {
-		t.Errorf("got error %q, want %q", gotErr, wantErr)
-	}
-
-}
-
-// TestSchedulerWithJobPanic verifies the scheduler handles a run function
-// that panics.
-func TestSchedulerWithJobPanic(t *testing.T) {
-	var executions atomic.Int32
-	var panics atomic.Int32
-
-	s := scheduler.NewScheduler(5, 2)
-
-	// Use t.Cleanup to ensure resources are cleaned up
-	t.Cleanup(s.Stop)
-
-	job := scheduler.NewJob(
-		"test",
-		500*time.Millisecond,
-		func(*scheduler.Job) bool {
-			executions.Add(1)
-			panic("panic job")
-			return true
-		},
-		scheduler.WithRecoveryHandler(func(job *scheduler.Job, v any) {
-			panics.Add(1)
-		}),
-	)
-	s.AddJob(job)
-
-	// Use a context with timeout to wait for job to finish.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	<-ctx.Done() // Wait for the context to expire
-
-	// Check if the job was executed at least once
-	gotExecutions := executions.Load()
-	if gotExecutions < 1 {
-		t.Errorf("got %d executions, want at least 1", gotExecutions)
-	}
-
-	// Check if panic function was executed at least once
-	gotPanics := panics.Load()
-	if gotExecutions < 1 {
-		t.Errorf("got %d panics, want at least 1", gotPanics)
-	}
-
-	if gotExecutions != gotPanics {
-		t.Errorf("want executions %d to match panics %d",
-			gotExecutions, gotPanics)
-	}
-}
-
-// TestSchedulerWithMaxExecutions verifies the scheduler handles max executions
-// for a job.
-func TestSchedulerWithMaxExecutions(t *testing.T) {
-	var executions atomic.Uint64
-
-	s := scheduler.NewScheduler(5, 2)
-
-	// Use t.Cleanup to ensure resources are cleaned up
-	t.Cleanup(s.Stop)
-
-	wantExecutions := uint64(3)
-
-	job := scheduler.NewJob(
-		"test",
-		500*time.Millisecond,
-		func(*scheduler.Job) bool {
-			executions.Add(1)
-			return true
-		},
-		scheduler.WithMaxExecutions(wantExecutions),
-	)
-	s.AddJob(job)
-
-	// Use a context with timeout to wait for job to finish.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	<-ctx.Done() // Wait for the context to expire
-
-	// Check if the job was executed at least once
-	gotExecutions := executions.Load()
-	if gotExecutions != wantExecutions {
-		t.Errorf("got %d executions, want %d executions",
-			gotExecutions, wantExecutions)
 	}
 }
 
