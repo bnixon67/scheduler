@@ -1,0 +1,209 @@
+# Design
+
+This document explains how the `scheduler` package works and why. For how
+to use it, see the package documentation (`go doc -all`).
+
+## Goals
+
+- Run named jobs at a fixed interval, with a limit on how many run at once.
+- Never run a job concurrently with itself.
+- Never let one job's failure or panic affect the program or other jobs.
+- Stop cleanly: either let runs finish or cancel them, and always wait for
+  them to return.
+- Stay small: no dependencies beyond the standard library, and no I/O of
+  its own.
+
+## Non-goals
+
+- Cron expressions or calendar schedules. Only fixed intervals.
+- Persistence. Jobs exist only while the process runs.
+- Catching up. Missed runs are skipped, never replayed (see
+  [Timing](#timing)).
+- Priorities, fairness between jobs, or changing a job's interval. These are
+  listed in `TODO.md` as possible future work.
+
+## Vocabulary
+
+- A **job** is the long-lived, named thing that is scheduled. It has an
+  interval, a `RunFunc`, options and a lifecycle.
+- A **run** is one call of a job's `RunFunc`.
+
+The API follows this split: `Job.Runs`, `WithMaxRuns`, `RunFunc`.
+
+## Structure
+
+```
+Scheduler
+├── jobs    map[name]*Job      registry of jobs that have not stopped
+├── slots   chan struct{}      semaphore, capacity maxConcurrent
+├── quit    context            canceled by Stop and Shutdown
+└── wg      WaitGroup          one count per job goroutine
+
+Job
+├── fixed:   name, interval, run, options
+├── counts:  runs, skipped     (atomic)
+└── ctx      context           passed to every run, canceled by Job.Stop
+```
+
+`Schedule` registers the job and starts one goroutine for it, `runJob`,
+which loops until the job finishes:
+
+1. Wait for a free slot by sending on `slots`, or return if the job or
+   scheduler is stopped.
+2. Check again for a stop, because `select` picks randomly when several
+   cases are ready.
+3. Record how late the run is, then call the `RunFunc`.
+4. Release the slot, and return if the job should not run again.
+5. Wait for the next tick, or return if stopped.
+
+However `runJob` returns, it calls `Job.Stop`, which removes the job from
+the registry.
+
+### Why a goroutine per job
+
+A goroutine per job plus a semaphore is simpler than a pool of workers
+fed by a queue, and gives the guarantees directly:
+
+- **No overlap.** A job's runs happen one after another in its own
+  goroutine, so it cannot run concurrently with itself, with no extra
+  bookkeeping.
+- **Delayed, never dropped.** A job waiting for a slot blocks on the
+  semaphore. There is no queue that can fill up and no submit error to
+  handle.
+- **Simple stop.** Each goroutine watches its job's context and the
+  scheduler's `quit` context, and the `WaitGroup` tracks them all.
+
+The cost is one goroutine and one timer per scheduled job, even while it is
+idle. `WithMaxJobs` bounds that when untrusted input decides what is
+scheduled.
+
+The semaphore makes no promise about which waiting job gets the next slot.
+
+## Timing
+
+A job runs once as soon as it is scheduled, then on a fixed grid: one
+interval after scheduling, two intervals after, and so on. A run's start
+time does not move the grid, so slow runs don't make the schedule drift.
+
+The grid comes from a `time.Ticker`. A ticker keeps at most one pending
+tick and drops the rest, which is what makes the scheduler **skip** missed
+runs instead of making them up:
+
+- If a run takes longer than the interval, or the job waits for a slot,
+  the next run starts late, as soon as it can.
+- The times that passed in the meantime are skipped. The value of the kept
+  tick is when it fired, so `time.Since(due)` measures the whole delay,
+  from both a slow previous run and waiting for a slot.
+- `Job.Skipped` adds the number of whole intervals each run was late by,
+  and a debug log message records it.
+
+Skipping fits periodic work, such as polling or cleanup, where running
+several times in a row to catch up would be wasted work or would overload
+whatever is behind the job.
+
+`WithMaxRuns` stops the job right after its last allowed run, not one
+interval later.
+
+## Contexts and stopping
+
+Each job has its own context, created from `context.Background()` and
+passed to every run. It is canceled only by `Job.Stop`. It is deliberately
+**not** derived from the scheduler's `quit` context, so that `Shutdown` can
+stop new runs from starting without canceling runs in progress.
+
+| Call | New runs | Runs in progress | Waits |
+| --- | --- | --- | --- |
+| `Job.Stop` | none for that job | context canceled, allowed to return | no |
+| `Scheduler.Shutdown(ctx)` | none | keep running with their context intact | until they return, or `ctx` is done |
+| `Scheduler.Stop` | none | context canceled | until they return |
+
+- `Shutdown` cancels `quit`, then waits on the `WaitGroup`. If its `ctx` is
+  done first, it stops every job, which cancels their contexts, and
+  returns `ctx.Err()` without waiting further, since a run that ignores
+  its context could block forever. Calling `Stop` afterward waits for
+  those runs.
+- `Stop` cancels `quit`, stops every job and waits.
+- All three are safe to call more than once and in any combination.
+  `Job.Stop` uses a `sync.Once`, and `Stopped` reads the context, so a
+  stopped job never restarts.
+- After either scheduler call, `Schedule` returns `ErrSchedulerStopped`.
+  The `stopped` flag is set under the mutex before jobs are collected, so
+  no job can be added after the list of jobs to stop is taken.
+- `wg.Add` happens under the same mutex, so it cannot race with
+  `wg.Wait`.
+
+### Registry and name reuse
+
+A job is removed from the registry as soon as it stops, for any reason,
+even while its last run is still in progress. Its name can be reused at
+once, so the old job's goroutine and a new job with the same name can
+briefly exist together. `remove` checks that the registered job is the
+same one before deleting it, so the old job cannot remove the new one.
+
+`WithMaxJobs` counts the registry, so a job stopped during a run that
+ignores its context stops counting before its goroutine exits.
+
+## Errors
+
+A `RunFunc` returns:
+
+- `nil` to keep running.
+- `ErrStop`, or an error wrapping it, to stop without reporting an error.
+- Any other error, which goes to the job's error handler. The job keeps
+  running unless it has `WithStopOnError(true)`.
+
+A panic in a run is recovered and turned into a `*PanicError` holding the
+panic value and stack trace, then handled like any other error. One
+failing job therefore cannot crash the program. Recovering can leave
+shared state half updated, which is why `WithStopOnError` exists.
+
+An error that only says the job's context was canceled, returned after the
+job stopped, is not a failure and is not reported. That is what a
+well-behaved run returns during `Stop`.
+
+`New` and `Schedule` return errors for bad arguments instead of panicking,
+because names and intervals may come from configuration or users. Errors
+about a specific job wrap a sentinel with details, so callers compare with
+`errors.Is`.
+
+## Logging
+
+The scheduler logs through `log/slog`, using `slog.Default()` unless
+`WithLogger` is given:
+
+- **Error:** failed and panicked runs, from the default error handler.
+- **Debug:** late runs, jobs stopping and reaching their maximum runs.
+
+`Job` implements `slog.LogValuer`, so it logs as a group of fields
+(`job.name`, `job.interval`, `job.runs`, …) rather than one string, and the
+fields are only read when a record is written. Durations are logged as
+strings such as `10s`, because `slog.JSONHandler` would otherwise write
+them as integer nanoseconds.
+
+## Security
+
+The package does no network, file or process I/O, but the program around
+it may schedule work based on untrusted input. The relevant controls are
+documented in `doc.go` and the README:
+
+- `WithMinInterval` stops a tiny interval from making a job run almost
+  continuously.
+- `WithMaxJobs` bounds goroutines and timers.
+- Job names have no length limit, so callers should check untrusted ones.
+- The default error handler logs errors, panic values and stacks in full,
+  which may contain secrets. `WithErrorHandler` can redact them.
+- `Job.String` quotes the name, so a name with newlines cannot forge extra
+  lines in plain-text logs.
+
+## Testing
+
+Timing-dependent tests use `testing/synctest`, which runs them on a fake
+clock, so they are fast and deterministic rather than relying on real
+sleeps. The runnable examples in `example_test.go` can't use it, so they
+use short real intervals.
+Tests are split by topic: lifecycle, limits, shutdown, skipped runs, and
+the job and scheduler basics. Run them with the race detector:
+
+```
+go test -race ./...
+```

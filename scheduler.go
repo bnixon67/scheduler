@@ -130,9 +130,9 @@ func (s *Scheduler) Job(name string) (job *Job, ok bool) {
 
 // Schedule creates a job that calls run immediately, then once per
 // interval, and returns it. The name must be unique among the jobs
-// currently scheduled; it can be reused once its job stops. run returns
-// whether the job should run again. Optional settings are applied using
-// [JobOption] values.
+// currently scheduled; it can be reused once its job stops. What run
+// returns decides whether the job keeps running; see [RunFunc]. Optional
+// settings are applied using [JobOption] values.
 //
 // Schedule returns [ErrEmptyName] if name is empty, [ErrInvalidInterval]
 // if interval is not positive, [ErrNilRun] if run is nil,
