@@ -27,7 +27,7 @@ func TestSkippedSlowJob(t *testing.T) {
 		t.Cleanup(s.Stop)
 
 		job := mustSchedule(t, s, "job", 10*time.Millisecond, sleepFor(50*time.Millisecond))
-		time.Sleep(time.Second)
+		synctest.Sleep(time.Second)
 
 		if got := job.Skipped(); got < 3 {
 			t.Errorf("Skipped() = %d, want at least 3", got)
@@ -46,7 +46,7 @@ func TestSkippedSaturated(t *testing.T) {
 		// jobs need 60ms per 40ms, so both fall behind.
 		a := mustSchedule(t, s, "a", 40*time.Millisecond, sleepFor(30*time.Millisecond))
 		b := mustSchedule(t, s, "b", 40*time.Millisecond, sleepFor(30*time.Millisecond))
-		time.Sleep(time.Second)
+		synctest.Sleep(time.Second)
 
 		if a.Skipped() == 0 || b.Skipped() == 0 {
 			t.Errorf("Skipped() = %d and %d, want both above 0",
@@ -62,7 +62,7 @@ func TestSkippedOnSchedule(t *testing.T) {
 		t.Cleanup(s.Stop)
 
 		job := mustSchedule(t, s, "job", 50*time.Millisecond, keepRunning)
-		time.Sleep(300 * time.Millisecond)
+		synctest.Sleep(300 * time.Millisecond)
 
 		if got := job.Skipped(); got != 0 {
 			t.Errorf("Skipped() = %d, want 0", got)
@@ -79,7 +79,7 @@ func TestSkippedLogged(t *testing.T) {
 
 		s := mustNew(t, 1, scheduler.WithLogger(logger))
 		mustSchedule(t, s, "job", 10*time.Millisecond, sleepFor(30*time.Millisecond))
-		time.Sleep(100 * time.Millisecond)
+		synctest.Sleep(100 * time.Millisecond)
 		s.Stop() // no more writes to buf after this
 
 		if !strings.Contains(buf.String(), `msg="job ran late"`) {
@@ -107,7 +107,7 @@ func TestDurationsLoggedAsText(t *testing.T) {
 		s := mustNew(t, 1, scheduler.WithLogger(logger))
 		mustSchedule(t, s, "job", 10*time.Millisecond, sleepFor(30*time.Millisecond),
 			scheduler.WithRunTimeout(time.Second))
-		time.Sleep(100 * time.Millisecond)
+		synctest.Sleep(100 * time.Millisecond)
 		s.Stop() // no more writes to buf after this
 
 		for _, field := range []string{

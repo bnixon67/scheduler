@@ -60,7 +60,7 @@ func TestSchedulerRunsOnSchedule(t *testing.T) {
 				return nil
 			})
 
-		time.Sleep(2250 * time.Millisecond) // runs at 0, 0.5, 1, 1.5 and 2s
+		synctest.Sleep(2250 * time.Millisecond) // runs at 0, 0.5, 1, 1.5 and 2s
 
 		if got := runs.Load(); got != 5 {
 			t.Errorf("runs = %d, want 5", got)
@@ -88,7 +88,7 @@ func TestSchedulerMultipleJobs(t *testing.T) {
 		mustSchedule(t, s, "2s", 2*time.Second, count)
 		mustSchedule(t, s, "3s", 3*time.Second, count)
 
-		time.Sleep(5500 * time.Millisecond)
+		synctest.Sleep(5500 * time.Millisecond)
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -110,7 +110,7 @@ func TestSchedulerWithMaxRuns(t *testing.T) {
 		job := mustSchedule(t, s, "job", 50*time.Millisecond, keepRunning,
 			scheduler.WithMaxRuns(3))
 
-		time.Sleep(time.Second)
+		synctest.Sleep(time.Second)
 
 		if !job.Stopped() || job.Runs() != 3 {
 			t.Errorf("Stopped(), Runs() = %t, %d; want true, 3",
@@ -163,11 +163,11 @@ func TestSchedulerStopEndsRuns(t *testing.T) {
 				return nil
 			})
 
-		time.Sleep(225 * time.Millisecond) // runs at 0, 100 and 200ms
+		synctest.Sleep(225 * time.Millisecond) // runs at 0, 100 and 200ms
 		s.Stop()
 		final := runs.Load()
 
-		time.Sleep(time.Second)
+		synctest.Sleep(time.Second)
 		if final != 3 || runs.Load() != final {
 			t.Errorf("runs = %d at Stop and %d later, want 3 both times",
 				final, runs.Load())
@@ -188,7 +188,7 @@ func TestHighFrequencyJob(t *testing.T) {
 				return nil
 			})
 
-		time.Sleep(100*time.Millisecond + time.Microsecond)
+		synctest.Sleep(100*time.Millisecond + time.Microsecond)
 
 		if got := runs.Load(); got != 101 {
 			t.Errorf("runs = %d, want 101", got)

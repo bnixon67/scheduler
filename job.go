@@ -461,8 +461,7 @@ func (j *Job) watchCancel(ctx context.Context) (returned func()) {
 // defaultErrorHandler logs a run's error. A panic is logged with its stack
 // trace.
 func defaultErrorHandler(j *Job, err error) {
-	var pe *PanicError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*PanicError](err); ok {
 		j.logger.Error("job panicked",
 			"job", j, "value", pe.Value, "stack", string(pe.Stack))
 		return

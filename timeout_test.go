@@ -57,7 +57,7 @@ func TestRunTimeout(t *testing.T) {
 			scheduler.WithRunTimeout(time.Second),
 			scheduler.WithErrorHandler(rec.handle))
 
-		time.Sleep(2 * time.Second)
+		synctest.Sleep(2 * time.Second)
 
 		if got := time.Duration(took.Load()); got != time.Second {
 			t.Errorf("run returned after %v, want %v", got, time.Second)
@@ -71,7 +71,7 @@ func TestRunTimeout(t *testing.T) {
 		}
 
 		// The next run gets a fresh timeout.
-		time.Sleep(time.Hour)
+		synctest.Sleep(time.Hour)
 		if got := len(rec.get()); got != 2 {
 			t.Errorf("errors after second run = %d, want 2", got)
 		}
@@ -90,7 +90,7 @@ func TestRunTimeoutStopOnError(t *testing.T) {
 			scheduler.WithStopOnError(true),
 			scheduler.WithErrorHandler(ignoreErrors))
 
-		time.Sleep(2 * time.Second)
+		synctest.Sleep(2 * time.Second)
 
 		if !job.Stopped() || job.Runs() != 1 {
 			t.Errorf("Stopped(), Runs() = %t, %d; want true, 1",
@@ -119,7 +119,7 @@ func TestRunTimeoutNotReached(t *testing.T) {
 			scheduler.WithRunTimeout(time.Second),
 			scheduler.WithErrorHandler(rec.handle))
 
-		time.Sleep(2 * time.Second)
+		synctest.Sleep(2 * time.Second)
 
 		if errs := rec.get(); len(errs) != 0 {
 			t.Errorf("errors = %v, want none", errs)
@@ -145,7 +145,7 @@ func TestRunTimeoutJobStopped(t *testing.T) {
 			scheduler.WithRunTimeout(time.Minute),
 			scheduler.WithErrorHandler(rec.handle))
 
-		time.Sleep(time.Second)
+		synctest.Sleep(time.Second)
 		job.Stop()
 
 		if err := <-result; !errors.Is(err, context.Canceled) {

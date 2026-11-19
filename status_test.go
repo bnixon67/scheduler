@@ -46,8 +46,7 @@ func TestStatusRunning(t *testing.T) {
 				return nil
 			})
 
-		time.Sleep(time.Second)
-		synctest.Wait()
+		synctest.Sleep(time.Second)
 		if !job.Running() {
 			t.Error("Running() = false during a run, want true")
 		}
@@ -64,8 +63,7 @@ func TestStatusRunning(t *testing.T) {
 			t.Error("Running() = false inside the RunFunc, want true")
 		}
 
-		time.Sleep(time.Hour) // the second run starts and returns at once
-		synctest.Wait()
+		synctest.Sleep(time.Hour) // the second run starts and returns at once
 		if got, want := job.LastRun(), start.Add(time.Hour); !got.Equal(want) {
 			t.Errorf("LastRun() = %v after the second run, want %v", got, want)
 		}
@@ -100,8 +98,7 @@ func TestStatusLastError(t *testing.T) {
 			t.Errorf("LastError() in the error handler = %v, want %v", inHandler, errBoom)
 		}
 
-		time.Sleep(time.Hour)
-		synctest.Wait()
+		synctest.Sleep(time.Hour)
 		if err := job.LastError(); err != nil {
 			t.Errorf("LastError() after a successful run = %v, want nil", err)
 		}
@@ -155,8 +152,8 @@ func TestStatusLastErrorNotFailures(t *testing.T) {
 				scheduler.WithErrorHandler(ignoreErrors))
 			synctest.Wait()
 
-			var pe *scheduler.PanicError
-			if err := job.LastError(); !errors.As(err, &pe) || pe.Value != "boom" {
+			err := job.LastError()
+			if pe, ok := errors.AsType[*scheduler.PanicError](err); !ok || pe.Value != "boom" {
 				t.Errorf("LastError() = %v, want a *PanicError with value boom", err)
 			}
 		})

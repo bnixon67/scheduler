@@ -35,7 +35,7 @@ func TestCancelGraceWarns(t *testing.T) {
 		s := mustNew(t, 1, scheduler.WithLogger(warnLogger(&buf)))
 
 		job := mustSchedule(t, s, "stubborn", time.Hour, ignoreCtx(20*time.Second))
-		time.Sleep(time.Second)
+		synctest.Sleep(time.Second)
 		job.Stop()
 		s.Stop() // waits the remaining 19s; no more writes to buf after this
 
@@ -63,7 +63,7 @@ func TestCancelGraceTimeout(t *testing.T) {
 		mustSchedule(t, s, "slow", time.Hour, ignoreCtx(10*time.Second),
 			scheduler.WithRunTimeout(time.Second),
 			scheduler.WithCancelGrace(2*time.Second))
-		time.Sleep(15 * time.Second)
+		synctest.Sleep(15 * time.Second)
 		s.Stop()
 
 		if want := `reason="context deadline exceeded" after=2s`; !strings.Contains(buf.String(), want) {

@@ -114,8 +114,8 @@ func TestExecuteResults(t *testing.T) {
 					t.Errorf("handler got %v, want it not called", got)
 				}
 			case *PanicError:
-				var pe *PanicError
-				if !errors.As(got, &pe) || pe.Value != failure || len(pe.Stack) == 0 {
+				pe, ok := errors.AsType[*PanicError](got)
+				if !ok || pe.Value != failure || len(pe.Stack) == 0 {
 					t.Errorf("handler got %#v, want a *PanicError with value and stack", got)
 				}
 			default:

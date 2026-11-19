@@ -111,7 +111,7 @@ The cost is one goroutine and one timer per scheduled job, even while it is
 idle. `WithMaxJobs` bounds that when untrusted input decides what is
 scheduled.
 
-Measured on Go 1.25 with jobs whose run does nothing, an idle job takes
+Measured on Go 1.27 with jobs whose run does nothing, an idle job takes
 about 6 KB: 4 KB of goroutine stack and 2 KB of heap for the `Job`, its
 contexts, its ticker and its registry entry. That is about 60 MB for
 10,000 jobs and 600 MB for 100,000. Idle jobs use no CPU, since each is

@@ -51,7 +51,7 @@ func TestStartDelay(t *testing.T) {
 			t.Errorf("LastRun before the delay = %v, want zero", job.LastRun())
 		}
 
-		time.Sleep(2*time.Minute + 45*time.Second)
+		synctest.Sleep(2*time.Minute + 45*time.Second)
 
 		want := []time.Duration{
 			30 * time.Second,
@@ -103,7 +103,7 @@ func TestStartDelayStop(t *testing.T) {
 		job := mustSchedule(t, s, "job", time.Minute, r.run,
 			scheduler.WithStartDelay(time.Hour))
 
-		time.Sleep(time.Minute)
+		synctest.Sleep(time.Minute)
 		job.Stop()
 		synctest.Wait()
 
@@ -114,7 +114,7 @@ func TestStartDelayStop(t *testing.T) {
 			t.Errorf("JobNames() = %v after Stop, want none", names)
 		}
 
-		time.Sleep(2 * time.Hour)
+		synctest.Sleep(2 * time.Hour)
 		if got := r.get(); len(got) != 0 {
 			t.Errorf("runs started at %v after Stop, want none", got)
 		}
@@ -139,7 +139,7 @@ func TestStartDelayShutdown(t *testing.T) {
 			t.Errorf("Shutdown took %v, want it to return at once", took)
 		}
 
-		time.Sleep(2 * time.Hour)
+		synctest.Sleep(2 * time.Hour)
 		if got := r.get(); len(got) != 0 {
 			t.Errorf("runs started at %v after Shutdown, want none", got)
 		}
@@ -161,7 +161,7 @@ func TestStartDelayHoldsNoSlot(t *testing.T) {
 		r := &runTimes{start: time.Now()}
 		mustSchedule(t, s, "now", time.Minute, r.run)
 
-		time.Sleep(90 * time.Second)
+		synctest.Sleep(90 * time.Second)
 
 		want := []time.Duration{0, time.Minute}
 		if got := r.get(); !slices.Equal(got, want) {
@@ -186,7 +186,7 @@ func TestStartDelaySpreadsJobs(t *testing.T) {
 				scheduler.WithStartDelay(time.Duration(i)*10*time.Second))
 		}
 
-		time.Sleep(85 * time.Second)
+		synctest.Sleep(85 * time.Second)
 
 		for i, r := range recs {
 			off := time.Duration(i) * 10 * time.Second

@@ -1,3 +1,3 @@
 module github.com/bnixon67/scheduler
 
-go 1.25
+go 1.27

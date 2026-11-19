@@ -29,7 +29,7 @@ func TestSchedulerNoOverlap(t *testing.T) {
 				return nil
 			})
 
-		time.Sleep(300 * time.Millisecond)
+		synctest.Sleep(300 * time.Millisecond)
 
 		if got := max.Load(); got != 1 {
 			t.Errorf("max concurrent runs of one job = %d, want 1", got)
@@ -55,9 +55,9 @@ func TestSchedulerSlowJobKeepsRunning(t *testing.T) {
 				return nil
 			})
 
-		time.Sleep(300 * time.Millisecond)
+		synctest.Sleep(300 * time.Millisecond)
 		first := runs.Load()
-		time.Sleep(300 * time.Millisecond)
+		synctest.Sleep(300 * time.Millisecond)
 		second := runs.Load()
 
 		if second <= first {
@@ -93,7 +93,7 @@ func TestSchedulerMaxConcurrent(t *testing.T) {
 				})
 		}
 
-		time.Sleep(time.Second)
+		synctest.Sleep(time.Second)
 
 		for i := range ran {
 			if !ran[i].Load() {
@@ -234,14 +234,14 @@ func TestSchedulerSameNameSeparateSchedulers(t *testing.T) {
 
 		a := mustSchedule(t, s1, "shared", time.Millisecond, run, limit)
 		b := mustSchedule(t, s2, "shared", time.Millisecond, run, limit)
-		time.Sleep(100 * time.Millisecond)
+		synctest.Sleep(100 * time.Millisecond)
 
 		if !a.Stopped() || !b.Stopped() || a.Runs() != 2 || b.Runs() != 2 {
 			t.Errorf("a, b = %v, %v; want both stopped after 2 runs", a, b)
 		}
 
 		c := mustSchedule(t, s1, "shared", time.Millisecond, run, limit)
-		time.Sleep(100 * time.Millisecond)
+		synctest.Sleep(100 * time.Millisecond)
 
 		if !c.Stopped() || c.Runs() != 2 {
 			t.Errorf("rescheduled job = %v, want stopped after 2 runs", c)
@@ -283,7 +283,7 @@ func TestWithLoggerNil(t *testing.T) {
 		job := mustSchedule(t, s, "job", time.Millisecond,
 			func(context.Context, *scheduler.Job) error { return errors.New("boom") },
 			scheduler.WithStopOnError(true))
-		time.Sleep(100 * time.Millisecond)
+		synctest.Sleep(100 * time.Millisecond)
 
 		if !job.Stopped() {
 			t.Error("job did not stop after its error")

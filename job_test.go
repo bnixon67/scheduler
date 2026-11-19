@@ -115,7 +115,7 @@ func TestJobStop(t *testing.T) {
 		}
 
 		close(release)
-		time.Sleep(5 * time.Second)
+		synctest.Sleep(5 * time.Second)
 		if got := runs.Load(); got != 1 {
 			t.Errorf("runs = %d, want 1", got)
 		}
@@ -133,7 +133,7 @@ func TestJobStopInRun(t *testing.T) {
 				job.Stop()
 				return nil
 			})
-		time.Sleep(5 * time.Second)
+		synctest.Sleep(5 * time.Second)
 
 		if got := job.Runs(); got != 1 {
 			t.Errorf("Runs() = %d, want 1", got)
@@ -152,7 +152,7 @@ func TestRunErrStop(t *testing.T) {
 		job := mustSchedule(t, s, "job", time.Second,
 			func(context.Context, *scheduler.Job) error { return scheduler.ErrStop },
 			scheduler.WithErrorHandler(func(*scheduler.Job, error) { called.Store(true) }))
-		time.Sleep(5 * time.Second)
+		synctest.Sleep(5 * time.Second)
 
 		if !job.Stopped() || job.Runs() != 1 {
 			t.Errorf("Stopped(), Runs() = %t, %d; want true, 1",
@@ -184,7 +184,7 @@ func TestRunError(t *testing.T) {
 								reported.Add(1)
 							}
 						}))
-					time.Sleep(2500 * time.Millisecond) // runs at 0s, 1s, 2s
+					synctest.Sleep(2500 * time.Millisecond) // runs at 0s, 1s, 2s
 
 					want := 3
 					if stop {

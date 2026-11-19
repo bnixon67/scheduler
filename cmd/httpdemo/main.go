@@ -17,7 +17,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -124,6 +123,8 @@ func main() {
 	defer stop()
 	select {
 	case <-ctx.Done():
+		// The cause names the signal, such as "interrupt signal received".
+		logger.Info("stopping early", "reason", context.Cause(ctx))
 	case <-allDone:
 	}
 	stop() // a second interrupt now kills the program
@@ -167,12 +168,9 @@ func (c *check) run(ctx context.Context, _ *scheduler.Job) error {
 	if err != nil {
 		return err
 	}
+	// Closing the body drains a small unread one, so the connection can be
+	// reused without reading it here.
 	defer func() { _ = resp.Body.Close() }()
-
-	// Read and discard the body so the connection can be reused.
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		return err
-	}
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("GET %s: %s", c.site, resp.Status)
