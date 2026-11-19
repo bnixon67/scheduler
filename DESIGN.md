@@ -37,6 +37,32 @@ to use it, see the package documentation (`go doc -all`).
 
 The API follows this split: `Job.Runs`, `WithMaxRuns`, `RunFunc`.
 
+## Why RunFunc takes no arguments
+
+`RunFunc` is `func(ctx context.Context, job *Job) error`. A run gets its
+data by capturing it in a closure or by being a method value, such as
+`s.Schedule(name, d, c.run)`, as `http.HandlerFunc` and
+`errgroup.Group.Go` callbacks do. The alternatives were rejected:
+
+- **An `args ...any` parameter or an `any` field on the job.** Every run
+  would have to type-assert its arguments, and mistakes would show up only
+  at run time. A closure gets the same data, checked by the compiler.
+- **A generic `Schedule[T]` taking `func(ctx, *Job, T) error`.** Go
+  methods cannot have type parameters, so this needs a package-level
+  function or a generic `Job[T]`, which spreads through `Scheduler.Job`
+  and the rest of the API, for nothing a closure cannot already do.
+- **A `Runner` interface, as `http.Handler` is to `HandlerFunc`.** A method
+  value already works as a `RunFunc`, so the interface would add a type
+  without letting callers do anything new.
+
+The two parameters are what a closure cannot supply. `ctx` comes from the
+scheduler: it is canceled when the job stops, and with `WithRunTimeout`
+each run gets its own. `job` is the run's own `*Job`, which a closure
+cannot safely capture: `Schedule` starts the first run before it returns
+the `*Job`, so a captured variable may still be nil. With the parameter,
+a run can call `job.Stop`, log `job`, or read `job.Runs` without that
+race.
+
 ## Structure
 
 ```
@@ -84,6 +110,30 @@ fed by a queue, and gives the guarantees directly:
 The cost is one goroutine and one timer per scheduled job, even while it is
 idle. `WithMaxJobs` bounds that when untrusted input decides what is
 scheduled.
+
+Measured on Go 1.25 with jobs whose run does nothing, an idle job takes
+about 6 KB: 4 KB of goroutine stack and 2 KB of heap for the `Job`, its
+contexts, its ticker and its registry entry. That is about 60 MB for
+10,000 jobs and 600 MB for 100,000. Idle jobs use no CPU, since each is
+blocked in a `select` and the runtime's timer heap wakes only jobs that
+are due. Runs happen on the job's goroutine, so a run that needs a deep
+stack grows it, until the garbage collector shrinks it again.
+
+Memory is rarely the first limit. Only `maxConcurrent` runs happen at
+once, so jobs keep to their schedule only if
+
+```
+jobs × average run time ÷ maxConcurrent < interval
+```
+
+For example, 10,000 jobs that each take 200 ms, with `maxConcurrent` 5
+and a one-minute interval, need 400 s per pass: runs start late and
+`Job.Skipped` grows, long before memory matters. The work itself, such as
+open connections or file descriptors, often runs out before that too.
+
+A goroutine per job suits up to about 100,000 jobs. Far beyond that, a
+single timer heap feeding a pool of workers would take a few hundred bytes
+per job, at the cost of the simplicity above.
 
 The semaphore makes no promise about which waiting job gets the next slot.
 

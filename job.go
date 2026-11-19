@@ -16,7 +16,12 @@ import (
 // RunFunc is the function a [Job] runs. ctx is canceled when the job stops,
 // or when the run's time is up if the job has [WithRunTimeout]. A run must
 // watch ctx and return soon after it is canceled; see the package
-// documentation's section "Writing a RunFunc". job is the Job being run.
+// documentation's section "Writing a RunFunc". job is the Job being run;
+// use it rather than capturing the result of [Scheduler.Schedule], which
+// may not be set yet when the first run starts.
+//
+// To pass data to a run, capture it in a closure, or use a method value
+// such as c.run, where c's type has a method with RunFunc's signature.
 //
 // Returning nil keeps the job running. Returning [ErrStop], or an error
 // wrapping it, stops the job without reporting an error. Any other error is

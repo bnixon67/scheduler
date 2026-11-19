@@ -24,4 +24,4 @@ execution, and stop jobs gracefully when required.
 - The default error handler logs errors in full, and for a panic the panic value and stack trace, which can contain secrets. Use `WithErrorHandler` to redact them, and never show a `*PanicError` to end users.
 - A recovered panic can leave shared state inconsistent, and by default the job runs again. Use `WithStopOnError(true)` where that is unsafe.
 
-For usage, see the examples in the [package documentation](https://pkg.go.dev/github.com/bnixon67/scheduler), or run `go doc -all github.com/bnixon67/scheduler`. A demo program is in `cmd/schedulerdemo`. For how the package works internally and why, see [DESIGN.md](DESIGN.md).
+For usage, see the examples in the [package documentation](https://pkg.go.dev/github.com/bnixon67/scheduler), or run `go doc -all github.com/bnixon67/scheduler`. Demo programs are in `cmd/schedulerdemo`, which runs sample jobs, and `cmd/httpdemo`, which checks websites periodically; run `go run ./cmd/httpdemo [url ...]`. For how the package works internally and why, see [DESIGN.md](DESIGN.md).
