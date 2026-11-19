@@ -74,8 +74,9 @@ func ExampleRunFunc() {
 }
 
 // This example passes ctx to an HTTP request, so the request is canceled
-// when the job stops or the run's timeout passes. The same goes for any
-// call that takes a context, such as a database query.
+// when the job stops. Add scheduler.WithRunTimeout to bound how long each
+// request may take. The same goes for any call that takes a context, such
+// as a database query.
 func ExampleRunFunc_http() {
 	// A local server stands in for a real one.
 	srv := httptest.NewServer(http.HandlerFunc(
@@ -109,9 +110,7 @@ func ExampleRunFunc_http() {
 	}
 	defer s.Stop()
 
-	job, err := s.Schedule("check", time.Minute, run,
-		scheduler.WithRunTimeout(5*time.Second), // bounds each request
-		scheduler.WithMaxRuns(1))
+	job, err := s.Schedule("check", time.Minute, run, scheduler.WithMaxRuns(1))
 	if err != nil {
 		log.Fatal(err)
 	}
