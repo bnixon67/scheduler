@@ -4,192 +4,288 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// Job represents a periodic task that executes at specified intervals.
+// RunFunc is the function a [Job] runs. ctx is canceled when the job stops,
+// so a long run should watch it and return early. job is the Job being
+// run.
 //
-// A Job continues to run until one of the following conditions is met:
-//   - It is explicitly stopped using Stop().
-//   - It reaches its maximum execution count, set with WithMaxExecutions().
-//   - Its run function returns false, indicating it should not be rescheduled.
-//   - A panic occurs during execution and job created WithStopOnPanic(true).
+// Returning nil keeps the job running. Returning [ErrStop], or an error
+// wrapping it, stops the job without reporting an error. Any other error is
+// passed to the job's error handler (see [WithErrorHandler]), and the job
+// keeps running unless it was scheduled [WithStopOnError](true). A panic is
+// recovered and handled like an error, as a [*PanicError].
+type RunFunc func(ctx context.Context, job *Job) error
+
+// Job is a periodic task scheduled by [Scheduler.Schedule]. It has a name,
+// an interval, a function to run and options, which never change, plus
+// runtime state: run and skipped counts, and whether it has stopped.
+// It is passed to its [RunFunc] and returned by [Scheduler.Schedule] and
+// [Scheduler.Job].
 //
-// A RecoveryHandler can be provided via WithRecoveryHandler() to handle
-// panics that occur during the execution of the run function. The default
-// Recovery Handler logs an error.
+// A job keeps running until one of these happens:
+//   - It is stopped with [Job.Stop], [Scheduler.Stop] or
+//     [Scheduler.Shutdown].
+//   - It reaches its maximum run count, set with [WithMaxRuns].
+//   - Its run function returns [ErrStop].
+//   - Its run function returns an error or panics, and the job was
+//     scheduled [WithStopOnError](true).
 //
-// Users can configure the Job to stop running after a panic using the
-// WithStopOnPanic(). The default behavior is to continue running after
-// a panic.
+// A stopped Job is never restarted; schedule a new one, which may reuse
+// the name.
 type Job struct {
-	id            string
-	interval      time.Duration
-	runFunc       func(*Job) bool
-	recoverFunc   func(*Job, any)
-	stopOnPanic   bool
-	maxExecutions uint64
-	executions    atomic.Uint64
-	logger        *slog.Logger
-	cancelCtx     context.Context
-	cancelFunc    context.CancelFunc
+	// Set when the job is scheduled and never changed.
+	name        string
+	interval    time.Duration
+	run         RunFunc
+	onError     func(*Job, error)
+	stopOnError bool
+	maxRuns     int
+	logger      *slog.Logger
+	sched       *Scheduler // nil only in tests that run a job directly
+
+	runs    atomic.Int64
+	skipped atomic.Int64 // whole intervals runs started late by
+
+	// ctx is passed to each run and canceled when the job stops. It is
+	// stored because it spans the job's whole life, like the context of
+	// an http.Request.
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopOnce sync.Once
 }
 
-// NewJob creates and returns a pointer to a job that runs periodically
-// when addded to a Scheduler. The job includes an ID, that must be unique
-// within each Scheduler, a positive interval between executions, and a
-// `run` function that executes at each interval. Optional settings can be
-// applied using JobOptions.
+// JobOption configures optional Job settings.
+type JobOption func(*Job)
+
+// WithErrorHandler sets the function called when a run returns an error
+// other than [ErrStop], or panics, in which case the error is a
+// [*PanicError]. A nil handler means the default, which logs the error.
+// To ignore errors, pass a function that does nothing.
 //
-// A Job continues to run until one of the following conditions is met:
-//   - It is explicitly stopped using Stop().
-//   - It reaches its maximum execution count, set with WithMaxExecutions().
-//   - Its run function returns false, indicating it should not be rescheduled.
-//   - A panic occurs during execution and job created WithStopOnPanic(true).
+// An error that only reports that the job's context was canceled, returned
+// after the job stopped, is not passed to the handler.
 //
-// If the interval is non-positive or `run` is nil, NewJob panics.
-func NewJob(id string, interval time.Duration, run func(*Job) bool, opts ...JobOption) *Job {
-	if interval <= 0 || run == nil {
-		panic("interval must be positive; run function cannot be nil")
+// The default handler logs the whole error, and for a panic the panic
+// value and stack trace, which can include secrets such as credentials or
+// connection strings. If errors or panic values may hold sensitive data,
+// supply a handler that redacts it before logging.
+func WithErrorHandler(handler func(*Job, error)) JobOption {
+	return func(j *Job) {
+		if handler == nil {
+			handler = defaultErrorHandler
+		}
+		j.onError = handler
+	}
+}
+
+// WithMaxRuns limits the number of times a job will run. If n is 0
+// or negative, there is no limit.
+func WithMaxRuns(n int) JobOption {
+	return func(j *Job) { j.maxRuns = n }
+}
+
+// WithStopOnError configures whether the job stops after a run returns an
+// error or panics. By default it keeps running.
+//
+// A recovered panic can leave data the run was changing half updated, and
+// later runs then work with that inconsistent state. Pass true for jobs
+// where that is unsafe, such as those that touch security-sensitive state.
+func WithStopOnError(b bool) JobOption {
+	return func(j *Job) { j.stopOnError = b }
+}
+
+// newJob validates its arguments and returns a Job ready to run.
+func newJob(name string, interval time.Duration, run RunFunc,
+	logger *slog.Logger, opts ...JobOption,
+) (*Job, error) {
+	switch {
+	case name == "":
+		return nil, ErrEmptyName
+	case interval <= 0:
+		return nil, fmt.Errorf("%w: %v", ErrInvalidInterval, interval)
+	case run == nil:
+		return nil, ErrNilRun
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &Job{
-		id:          id,
-		interval:    interval,
-		runFunc:     run,
-		recoverFunc: defaultRecoveryHandler,
-		logger:      slog.Default(),
-		cancelCtx:   ctx,
-		cancelFunc:  cancel,
+	j := &Job{
+		name:     name,
+		interval: interval,
+		run:      run,
+		onError:  defaultErrorHandler,
+		logger:   logger,
+		ctx:      ctx,
+		cancel:   cancel,
 	}
-
-	// Configure optional parameters.
 	for _, opt := range opts {
-		opt(job)
+		opt(j)
 	}
 
-	return job
+	return j, nil
 }
 
 // String returns a human-readable representation of the Job.
 func (j *Job) String() string {
 	return fmt.Sprintf(
 		"Job{"+
-			"id: %s, "+
+			"name: %q, "+
 			"interval: %s, "+
-			"stopOnPanic: %t, "+
-			"maxExecutions: %d, "+
-			"executions: %d, "+
-			"isStopped: %t}",
-		j.id,
+			"stopOnError: %t, "+
+			"maxRuns: %d, "+
+			"runs: %d, "+
+			"skipped: %d, "+
+			"stopped: %t}",
+		j.name,
 		j.interval,
-		j.stopOnPanic,
-		j.maxExecutions,
-		j.executions.Load(),
-		j.IsStopped(),
+		j.stopOnError,
+		j.maxRuns,
+		j.Runs(),
+		j.Skipped(),
+		j.Stopped(),
 	)
 }
 
-// JobOption configures optional Job parameters.
-type JobOption func(*Job)
-
-// WithRecoveryHandler configures a custom function to handle panics during
-// the job's execution. If the job's `run` function panics, this recovery
-// function is called with the Job and the panic value, enabling custom
-// error handling or cleanup.
-func WithRecoveryHandler(recoveryHandler func(*Job, any)) JobOption {
-	return func(j *Job) { j.recoverFunc = recoveryHandler }
+// LogValue implements [slog.LogValuer], so a Job logs as structured
+// fields. The fields are read only when a record is actually written, so
+// disabled debug logging costs almost nothing.
+func (j *Job) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("name", j.name),
+		slog.String("interval", j.interval.String()),
+		slog.Int("runs", j.Runs()),
+		slog.Int("skipped", j.Skipped()),
+		slog.Bool("stopped", j.Stopped()),
+	)
 }
 
-// WithMaxExecutions limits the number of times a job will run. If `n` is 0,
-// the job runs indefinitely. Use this option to control how many times the
-// job executes before stopping automatically.
-func WithMaxExecutions(n uint64) JobOption {
-	return func(j *Job) { j.maxExecutions = n }
+// Name returns the job's name, which identifies it within its [Scheduler]
+// until it stops.
+func (j *Job) Name() string {
+	return j.name
 }
 
-// WithStopOnPanic configures the Job to stop running after a panic occurs
-// in the run function. If set to true, the Job will not be rescheduled
-// after a panic. The default behavior is to continue running after a panic.
-func WithStopOnPanic(b bool) JobOption {
-	return func(j *Job) { j.stopOnPanic = b }
-}
-
-// ID returns the unique identifier for the Job, which can be used to
-// reference or manage the job within a scheduler.
-func (j *Job) ID() string {
-	return j.id
-}
-
-// Interval returns the time duration between each execution of the Job.
+// Interval returns the time between scheduled runs.
 func (j *Job) Interval() time.Duration {
 	return j.interval
 }
 
-// Stop prevents the job from being re-queued.
+// Runs returns how many times the job has run, including runs that
+// failed or panicked.
+func (j *Job) Runs() int {
+	return int(j.runs.Load())
+}
+
+// Skipped returns how many scheduled runs the job has missed. Each time a
+// run starts late, the number of whole intervals it was late by is added.
+// A run is late when the previous run took longer than the interval, or
+// when it waited for a free slot because the [Scheduler] was saturated. A
+// count that keeps growing means the job is not getting its intended
+// schedule.
+func (j *Job) Skipped() int {
+	return int(j.skipped.Load())
+}
+
+// Context returns the context passed to each run, which is canceled when
+// the job stops, including when a [Scheduler.Shutdown] deadline passes.
+// Inside a [RunFunc], use the ctx argument instead; this method is for
+// code outside the run function that needs to follow the job's lifetime.
+func (j *Job) Context() context.Context {
+	return j.ctx
+}
+
+// Stop prevents the job from running again and removes it from its
+// [Scheduler], so its name can be reused at once. A run already in
+// progress is allowed to finish; its context is canceled so it can return
+// early. Stop is safe to call more than once, including from the job's
+// own [RunFunc].
 func (j *Job) Stop() {
-	j.cancelFunc() // Cancel the job context
-	j.logger.Debug("stopped", "job", j)
+	j.stopOnce.Do(func() {
+		j.cancel()
+		if j.sched != nil {
+			j.sched.remove(j)
+		}
+		j.logger.Debug("stopped", "job", j)
+	})
 }
 
-// IsStopped returns true if the Job will no longer be scheduled for execution.
-func (j *Job) IsStopped() bool {
-	select {
-	case <-j.cancelCtx.Done():
-		return true
-	default:
-		return false
+// Stopped reports whether the job will no longer run.
+func (j *Job) Stopped() bool {
+	return j.ctx.Err() != nil
+}
+
+// recordLateness adds to the skipped count when a run starts at least one
+// whole interval after it was due.
+func (j *Job) recordLateness(late time.Duration) {
+	if late < j.interval {
+		return
 	}
+
+	n := int64(late / j.interval)
+	j.skipped.Add(n)
+	j.logger.Debug("job ran late", "job", j, "late", late.String(), "skipped", n)
 }
 
-// defaultRecoveryHandler is called when a panic occurs in a job's run function
-// and no custom recover function is provided.
-func defaultRecoveryHandler(j *Job, v any) {
-	j.logger.Error("job panicked", "job", j, "value", v)
+// hasReachedMaxRuns reports whether a limit is set (> 0) and the
+// run count has reached it.
+func (j *Job) hasReachedMaxRuns() bool {
+	return j.maxRuns > 0 && j.Runs() >= j.maxRuns
 }
 
-// hasReachedMaxExecutions checks if the Job has reached its maximum number
-// of executions. It returns true if maxExecutions is set (> 0) and the
-// current execution count is equal to or exceeds it.
-func (j *Job) hasReachedMaxExecutions() bool {
-	return j.maxExecutions > 0 && j.executions.Load() >= j.maxExecutions
-}
-
-// execute calls the run function of the Job and recovers from any panics
-// to prevent a failing job from crashing the workers. It returns a boolean
-// indicating whether the Job should be rescheduled.
-//
-// A job will not be rescheduled if the Job reaches its maximum executions,
-// its run function returns false, or if a panic occurs and the Job is
-// configured WithStopOnPanic(true).
+// execute runs the job once and returns whether it should run again.
 func (j *Job) execute() bool {
-	if j.hasReachedMaxExecutions() {
-		j.logger.Debug("max executions reached", "job", j)
+	if j.hasReachedMaxRuns() {
+		j.logger.Debug("max runs reached", "job", j)
 		return false
 	}
 
-	j.executions.Add(1)
+	j.runs.Add(1)
 
-	// Run the job's function within a closure to handle panics.
-	var shouldReschedule bool
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				if j.recoverFunc != nil {
-					j.recoverFunc(j, r)
-				}
+	if err := j.call(); err != nil {
+		if errors.Is(err, ErrStop) {
+			return false
+		}
+		// A run that returns ctx.Err() after being stopped has not failed.
+		canceled := j.Stopped() && errors.Is(err, context.Canceled)
+		if !canceled {
+			j.onError(j, err)
+		}
+		if j.stopOnError {
+			return false
+		}
+	}
 
-				shouldReschedule = !j.stopOnPanic
-			}
-		}()
+	// Stop right after the last allowed run instead of one interval later.
+	return !j.hasReachedMaxRuns()
+}
 
-		// Execute the job
-		shouldReschedule = j.runFunc(j)
+// call runs the job's function, recovering a panic as a *PanicError so a
+// failing job cannot crash the program.
+func (j *Job) call() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = &PanicError{Value: r, Stack: debug.Stack()}
+		}
 	}()
 
-	return shouldReschedule
+	return j.run(j.ctx, j)
+}
+
+// defaultErrorHandler logs a run's error. A panic is logged with its stack
+// trace.
+func defaultErrorHandler(j *Job, err error) {
+	var pe *PanicError
+	if errors.As(err, &pe) {
+		j.logger.Error("job panicked",
+			"job", j, "value", pe.Value, "stack", string(pe.Stack))
+		return
+	}
+	j.logger.Error("job failed", "job", j, "err", err)
 }

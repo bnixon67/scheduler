@@ -24,4 +24,4 @@ go.work.sum
 
 # coverage information
 cover/
-cmd/cmd
+cmd/schedulerdemo/schedulerdemo
