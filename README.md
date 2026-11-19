@@ -16,6 +16,7 @@ execution, and stop jobs gracefully when required.
 - **Graceful Shutdown**: `Shutdown(ctx)` starts no new runs and lets runs in progress finish; if `ctx` is done first, it cancels them and returns `ctx.Err()`. `Stop` cancels runs in progress immediately and waits for them to return. Each run receives a `context.Context`, canceled when the job stops, so long runs can return early.
 - **Run Timeouts**: `WithRunTimeout` cancels a run's context after a set time, and the run's error, which matches `context.DeadlineExceeded`, goes to the error handler.
 - **Cancellation Checks**: A run must watch its context and return when it is canceled; the package documentation's "Writing a RunFunc" section lists the rules. A run that is still going `WithCancelGrace` (5s by default) after being canceled is logged as a warning, naming the job.
+- **Job Status**: `Job.Running()`, `Job.LastRun()` and `Job.LastError()` report whether a run is in progress, when the latest one started, and the error from the latest finished run.
 - **Resource Limits**: `WithMinInterval` rejects intervals that are too short and `WithMaxJobs` caps how many jobs can be scheduled, for programs where untrusted input decides what runs.
 
 ## Security Notes

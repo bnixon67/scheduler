@@ -49,6 +49,7 @@ Scheduler
 Job
 ├── fixed:   name, interval, run, options
 ├── counts:  runs, skipped     (atomic)
+├── status:  running, lastRun, lastErr   (one mutex, read together)
 └── ctx      context           passed to every run, canceled by Job.Stop
 ```
 

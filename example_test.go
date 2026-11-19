@@ -2,6 +2,7 @@ package scheduler_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -150,6 +151,89 @@ func ExampleJob_Stop() {
 	// Output:
 	// run canceled: context canceled
 	// still scheduled: false
+}
+
+// This example checks whether a run is in progress, during and after it.
+func ExampleJob_Running() {
+	s, err := scheduler.New(1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Stop()
+
+	started, release := make(chan struct{}), make(chan struct{})
+	job, err := s.Schedule("work", time.Hour,
+		func(context.Context, *scheduler.Job) error {
+			close(started)
+			<-release // the work
+			return nil
+		},
+		scheduler.WithMaxRuns(1))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	<-started
+	fmt.Println("running:", job.Running())
+
+	close(release)
+	<-job.Context().Done() // canceled when the job stops after its one run
+	fmt.Println("running:", job.Running())
+
+	// Output:
+	// running: true
+	// running: false
+}
+
+// This example checks that a job has run recently, as a health check
+// might.
+func ExampleJob_LastRun() {
+	s, err := scheduler.New(1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Stop()
+
+	job, err := s.Schedule("backup", time.Hour,
+		func(context.Context, *scheduler.Job) error { return nil },
+		scheduler.WithMaxRuns(1))
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-job.Context().Done()
+
+	fmt.Println("ran in the last minute:", time.Since(job.LastRun()) < time.Minute)
+
+	// Output:
+	// ran in the last minute: true
+}
+
+// This example reports a job as unhealthy if its latest run failed.
+func ExampleJob_LastError() {
+	s, err := scheduler.New(1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Stop()
+
+	job, err := s.Schedule("sync", time.Hour,
+		func(context.Context, *scheduler.Job) error {
+			return errors.New("database unavailable")
+		},
+		scheduler.WithMaxRuns(1),
+		// Don't log the error; it is checked below instead.
+		scheduler.WithErrorHandler(func(*scheduler.Job, error) {}))
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-job.Context().Done()
+
+	if err := job.LastError(); err != nil {
+		fmt.Println("unhealthy:", err)
+	}
+
+	// Output:
+	// unhealthy: database unavailable
 }
 
 // This example lets a run in progress finish before the program exits,

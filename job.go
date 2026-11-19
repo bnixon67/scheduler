@@ -57,12 +57,25 @@ type Job struct {
 	runs    atomic.Int64
 	skipped atomic.Int64 // whole intervals runs started late by
 
+	// status describes the latest run. It is guarded by a mutex rather
+	// than kept in atomics so its fields are always read together.
+	statusMu sync.Mutex
+	status   runStatus
+
 	// ctx is passed to each run and canceled when the job stops. It is
 	// stored because it spans the job's whole life, like the context of
 	// an http.Request.
 	ctx      context.Context
 	cancel   context.CancelFunc
 	stopOnce sync.Once
+}
+
+// runStatus is what [Job.Running], [Job.LastRun] and [Job.LastError]
+// report.
+type runStatus struct {
+	running bool
+	lastRun time.Time // start of the latest run; zero before the first
+	lastErr error     // error reported for the latest finished run
 }
 
 // JobOption configures optional Job settings.
@@ -234,6 +247,33 @@ func (j *Job) Skipped() int {
 	return int(j.skipped.Load())
 }
 
+// Running reports whether a run of the job is in progress.
+func (j *Job) Running() bool {
+	j.statusMu.Lock()
+	defer j.statusMu.Unlock()
+	return j.status.running
+}
+
+// LastRun returns when the job's latest run started, including a run in
+// progress. It returns the zero time if the job has not run yet.
+func (j *Job) LastRun() time.Time {
+	j.statusMu.Lock()
+	defer j.statusMu.Unlock()
+	return j.status.lastRun
+}
+
+// LastError returns the error from the job's latest finished run: the
+// error passed to its error handler, which is a [*PanicError] if the run
+// panicked. It returns nil if that run succeeded, if it returned
+// [ErrStop], if it only reported that its context was canceled after the
+// job stopped, or if no run has finished yet. While a run is in progress,
+// it reports the run before.
+func (j *Job) LastError() error {
+	j.statusMu.Lock()
+	defer j.statusMu.Unlock()
+	return j.status.lastErr
+}
+
 // Context returns the job's context, which is canceled when the job stops,
 // including when a [Scheduler.Shutdown] deadline passes. Each run gets this
 // context, or with [WithRunTimeout] a child of it with that timeout.
@@ -290,15 +330,34 @@ func (j *Job) execute() bool {
 
 	j.runs.Add(1)
 
-	if err := j.call(); err != nil {
-		if errors.Is(err, ErrStop) {
-			return false
-		}
-		// A run that returns ctx.Err() after being stopped has not failed.
-		canceled := j.Stopped() && errors.Is(err, context.Canceled)
-		if !canceled {
-			j.onError(j, err)
-		}
+	j.statusMu.Lock()
+	j.status.running = true
+	j.status.lastRun = time.Now()
+	j.statusMu.Unlock()
+
+	err := j.call()
+
+	// ErrStop is a request, not a failure, and neither is a run that
+	// returns ctx.Err() after the job was stopped.
+	stop := errors.Is(err, ErrStop)
+	canceled := j.Stopped() && errors.Is(err, context.Canceled)
+	failed := err != nil && !stop && !canceled
+
+	// Update the status before calling the error handler, so the handler
+	// sees this run's result.
+	j.statusMu.Lock()
+	j.status.running = false
+	j.status.lastErr = nil
+	if failed {
+		j.status.lastErr = err
+	}
+	j.statusMu.Unlock()
+
+	switch {
+	case stop:
+		return false
+	case failed:
+		j.onError(j, err)
 		if j.stopOnError {
 			return false
 		}
