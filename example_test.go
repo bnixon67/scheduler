@@ -3,7 +3,10 @@ package scheduler_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"time"
 
 	"github.com/bnixon67/scheduler"
@@ -36,6 +39,86 @@ func ExampleScheduler() {
 	// run 2
 	// run 3
 	// runs: 3
+}
+
+// This example shows the shape of a RunFunc that follows the rules in
+// "Writing a RunFunc": it checks ctx between steps, passes ctx to any
+// blocking call, and returns ctx.Err() once ctx is done.
+func ExampleRunFunc() {
+	run := func(ctx context.Context, _ *scheduler.Job) error {
+		for _, item := range []string{"a", "b", "c"} {
+			if err := ctx.Err(); err != nil {
+				return err // canceled, so stop early
+			}
+			fmt.Println("handled", item) // real work passes ctx to its calls
+		}
+		return nil
+	}
+
+	s, err := scheduler.New(1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Stop()
+
+	job, err := s.Schedule("sync", time.Hour, run, scheduler.WithMaxRuns(1))
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-job.Context().Done() // canceled when the job stops after its one run
+
+	// Output:
+	// handled a
+	// handled b
+	// handled c
+}
+
+// This example passes ctx to an HTTP request, so the request is canceled
+// when the job stops or the run's timeout passes. The same goes for any
+// call that takes a context, such as a database query.
+func ExampleRunFunc_http() {
+	// A local server stands in for a real one.
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "ok")
+		}))
+	defer srv.Close()
+
+	run := func(ctx context.Context, _ *scheduler.Job) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req) // returns early if ctx is canceled
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }() // nothing to do on failure
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		fmt.Println(resp.Status, string(body))
+		return nil
+	}
+
+	s, err := scheduler.New(1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Stop()
+
+	job, err := s.Schedule("check", time.Minute, run,
+		scheduler.WithRunTimeout(5*time.Second), // bounds each request
+		scheduler.WithMaxRuns(1))
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-job.Context().Done()
+
+	// Output:
+	// 200 OK ok
 }
 
 // This example stops a long-running job. Its run function watches ctx, so

@@ -4,7 +4,5 @@ Scheduler
 Job
 - [x] Pass a context.Context to the run function, canceled when the job or scheduler stops.
 - [x] Let the run function return an error, handled by an error handler.
-- [ ] Add job states (e.g., Pending, Running, Completed, Failed) to track and query job statuses
-- [ ] Allow jobs to adjust their interval dynamically
-- [ ] Implement a priority system for jobs, allowing high-priority jobs to be executed before others.
-- [ ] add a maximum execution time for each job and an optional onTimeout function 
+- [x] Add a maximum time for each run (WithRunTimeout).
+- [ ] Report what a job is doing and how its last run went: Running(), LastRun(), LastError(), and possibly Waiting() for a job blocked on a slot.

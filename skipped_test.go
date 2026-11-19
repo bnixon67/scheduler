@@ -105,11 +105,14 @@ func TestDurationsLoggedAsText(t *testing.T) {
 			&slog.HandlerOptions{Level: slog.LevelDebug}))
 
 		s := mustNew(t, 1, scheduler.WithLogger(logger))
-		mustSchedule(t, s, "job", 10*time.Millisecond, sleepFor(30*time.Millisecond))
+		mustSchedule(t, s, "job", 10*time.Millisecond, sleepFor(30*time.Millisecond),
+			scheduler.WithRunTimeout(time.Second))
 		time.Sleep(100 * time.Millisecond)
 		s.Stop() // no more writes to buf after this
 
-		for _, field := range []string{`"interval":"10ms"`, `"late":"20ms"`} {
+		for _, field := range []string{
+			`"interval":"10ms"`, `"runTimeout":"1s"`, `"late":"20ms"`,
+		} {
 			if !strings.Contains(buf.String(), field) {
 				t.Errorf("log = %q, want field %s", buf.String(), field)
 			}

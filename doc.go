@@ -16,6 +16,38 @@
 // [Scheduler.Shutdown], which lets runs in progress finish, or with
 // [Scheduler.Stop], which cancels them.
 //
+// # Writing a RunFunc
+//
+// The scheduler stops a run by canceling the ctx passed to it. Go cannot
+// stop a goroutine from outside, so this works only if the run cooperates.
+// A RunFunc must:
+//
+//   - Pass ctx to every blocking call that accepts one, such as
+//     [net/http.NewRequestWithContext], database queries and
+//     [os/exec.CommandContext].
+//   - Wait with a select on ctx.Done(), not with [time.Sleep] or a bare
+//     channel receive, and check ctx between steps of a long loop.
+//   - Return once ctx is done, with ctx.Err() or an error wrapping it.
+//     That error is not reported when the job was stopped. After a
+//     [WithRunTimeout] timeout it is reported, and matches
+//     [context.DeadlineExceeded] with [errors.Is].
+//   - Use ctx, or a context derived from it, for all its work, never
+//     [context.Background] or [context.TODO]. The contextcheck linter in
+//     golangci-lint catches this mistake.
+//
+// A run that ignores ctx keeps running after it is canceled, so:
+//
+//   - [Scheduler.Shutdown] returns at its deadline with the run still
+//     going, and [Scheduler.Stop] waits for as long as the run takes.
+//   - [WithRunTimeout] has no effect.
+//   - The run keeps its concurrency slot, so other jobs wait.
+//   - Its job stops counting toward [WithMaxJobs] while its goroutine
+//     lives on.
+//
+// To find such runs, the scheduler logs a warning when a run has not
+// returned some time after its ctx was canceled, and another when it
+// finally returns. Set the time with [WithCancelGrace].
+//
 // # Security
 //
 // The package does no network, file or process I/O of its own, but a
@@ -38,6 +70,6 @@
 // unsafe.
 //
 // A run that ignores its context can outlive a [Scheduler.Shutdown]
-// deadline. Watch ctx in long runs, and call [Scheduler.Stop] after
-// Shutdown returns an error.
+// deadline; see "Writing a RunFunc". Watch ctx in long runs, and call
+// [Scheduler.Stop] after Shutdown returns an error.
 package scheduler

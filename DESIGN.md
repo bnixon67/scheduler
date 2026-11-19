@@ -19,8 +19,15 @@ to use it, see the package documentation (`go doc -all`).
 - Persistence. Jobs exist only while the process runs.
 - Catching up. Missed runs are skipped, never replayed (see
   [Timing](#timing)).
-- Priorities, fairness between jobs, or changing a job's interval. These are
-  listed in `TODO.md` as possible future work.
+- Priorities or fairness between jobs. Priority only matters when every
+  slot is busy, and it would replace the semaphore with a priority queue
+  that can starve low-priority jobs. To guarantee capacity for some jobs,
+  give them their own `Scheduler`.
+- Changing a job's interval. A job's settings never change after it is
+  scheduled. To change one, stop the job and schedule a new one; the name
+  can be reused at once.
+- Forcing a run to stop. Go cannot kill a goroutine, so stopping and
+  timeouts cancel a run's context and rely on the run to return.
 
 ## Vocabulary
 
@@ -111,6 +118,14 @@ passed to every run. It is canceled only by `Job.Stop`. It is deliberately
 **not** derived from the scheduler's `quit` context, so that `Shutdown` can
 stop new runs from starting without canceling runs in progress.
 
+With `WithRunTimeout`, each run instead gets a child of the job's context
+with that timeout, so stopping the job still cancels it. A run that
+returns because its time is up reports `context.DeadlineExceeded` to the
+error handler like any other error, so no separate timeout callback is
+needed, and `WithStopOnError` applies to it too. The timeout is
+cooperative: a run that ignores its context keeps its slot until it
+returns.
+
 | Call | New runs | Runs in progress | Waits |
 | --- | --- | --- | --- |
 | `Job.Stop` | none for that job | context canceled, allowed to return | no |
@@ -131,6 +146,25 @@ stop new runs from starting without canceling runs in progress.
   no job can be added after the list of jobs to stop is taken.
 - `wg.Add` happens under the same mutex, so it cannot race with
   `wg.Wait`.
+
+### Runs that ignore cancellation
+
+Since cancellation only works if runs cooperate, the package documents
+the rules a `RunFunc` must follow in one place, the "Writing a RunFunc"
+section of `doc.go`, and detects runs that break them.
+
+For each run, `call` registers a `context.AfterFunc` on the run's
+context. If the context is canceled, by any of the calls above or a
+run timeout, a timer starts. If the run has not returned when it fires, after
+`WithCancelGrace` (5s by default), a warning names the job and the reason
+for the cancellation, and a second warning says how long the run took to
+return. A run that returns before its context is canceled removes the
+watch, so well-behaved runs cost one `AfterFunc` registration and nothing
+else.
+
+The function the run returns through waits for the watcher to finish, so
+both warnings are written before the job's goroutine exits, and never
+after `Stop` returns.
 
 ### Registry and name reuse
 
@@ -175,8 +209,8 @@ The scheduler logs through `log/slog`, using `slog.Default()` unless
 - **Debug:** late runs, jobs stopping and reaching their maximum runs.
 
 `Job` implements `slog.LogValuer`, so it logs as a group of fields
-(`job.name`, `job.interval`, `job.runs`, …) rather than one string, and the
-fields are only read when a record is written. Durations are logged as
+(`job.name`, `job.interval`, `job.runTimeout`, `job.runs`, …) rather
+than one string, and the fields are only read when a record is written. Durations are logged as
 strings such as `10s`, because `slog.JSONHandler` would otherwise write
 them as integer nanoseconds.
 

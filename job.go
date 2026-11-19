@@ -14,8 +14,9 @@ import (
 )
 
 // RunFunc is the function a [Job] runs. ctx is canceled when the job stops,
-// so a long run should watch it and return early. job is the Job being
-// run.
+// or when the run's time is up if the job has [WithRunTimeout]. A run must
+// watch ctx and return soon after it is canceled; see the package
+// documentation's section "Writing a RunFunc". job is the Job being run.
 //
 // Returning nil keeps the job running. Returning [ErrStop], or an error
 // wrapping it, stops the job without reporting an error. Any other error is
@@ -48,6 +49,8 @@ type Job struct {
 	onError     func(*Job, error)
 	stopOnError bool
 	maxRuns     int
+	runTimeout  time.Duration // 0 means no timeout
+	cancelGrace time.Duration // 0 means no warning
 	logger      *slog.Logger
 	sched       *Scheduler // nil only in tests that run a job directly
 
@@ -92,6 +95,40 @@ func WithMaxRuns(n int) JobOption {
 	return func(j *Job) { j.maxRuns = n }
 }
 
+// WithRunTimeout limits how long each run may take. The ctx passed to the
+// [RunFunc] is canceled d after the run starts. A run that returns
+// because of it, with ctx.Err() or an error wrapping it, has that error
+// passed to the error handler, where errors.Is(err,
+// [context.DeadlineExceeded]) reports true. The job keeps running
+// unless it was scheduled [WithStopOnError](true). If d is 0 or negative,
+// runs have no time limit, which is the default.
+//
+// The timeout is cooperative: Go cannot stop a goroutine from outside, so
+// a run that ignores ctx keeps running, and keeps its concurrency slot,
+// until it returns.
+func WithRunTimeout(d time.Duration) JobOption {
+	return func(j *Job) { j.runTimeout = max(d, 0) }
+}
+
+// DefaultCancelGrace is how long a run may keep going after its context
+// is canceled before the scheduler logs a warning; see [WithCancelGrace].
+const DefaultCancelGrace = 5 * time.Second
+
+// WithCancelGrace sets how long a run may keep going after its context is
+// canceled, by [Job.Stop], [Scheduler.Stop], a [Scheduler.Shutdown]
+// deadline or [WithRunTimeout], before the scheduler logs a warning that
+// it ignored the cancellation. When such a run does return, a second
+// warning says how long it took. The default is [DefaultCancelGrace]. If
+// d is 0 or negative, no warning is logged.
+//
+// The warning does not stop the run, which Go cannot do from outside; it
+// shows which job breaks the rules in the package documentation's section
+// "Writing a RunFunc". Raise d for a job that needs time to clean up after
+// being canceled.
+func WithCancelGrace(d time.Duration) JobOption {
+	return func(j *Job) { j.cancelGrace = max(d, 0) }
+}
+
 // WithStopOnError configures whether the job stops after a run returns an
 // error or panics. By default it keeps running.
 //
@@ -117,13 +154,14 @@ func newJob(name string, interval time.Duration, run RunFunc,
 
 	ctx, cancel := context.WithCancel(context.Background())
 	j := &Job{
-		name:     name,
-		interval: interval,
-		run:      run,
-		onError:  defaultErrorHandler,
-		logger:   logger,
-		ctx:      ctx,
-		cancel:   cancel,
+		name:        name,
+		interval:    interval,
+		run:         run,
+		onError:     defaultErrorHandler,
+		cancelGrace: DefaultCancelGrace,
+		logger:      logger,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	for _, opt := range opts {
 		opt(j)
@@ -140,6 +178,7 @@ func (j *Job) String() string {
 			"interval: %s, "+
 			"stopOnError: %t, "+
 			"maxRuns: %d, "+
+			"runTimeout: %s, "+
 			"runs: %d, "+
 			"skipped: %d, "+
 			"stopped: %t}",
@@ -147,6 +186,7 @@ func (j *Job) String() string {
 		j.interval,
 		j.stopOnError,
 		j.maxRuns,
+		j.runTimeout,
 		j.Runs(),
 		j.Skipped(),
 		j.Stopped(),
@@ -160,6 +200,7 @@ func (j *Job) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("name", j.name),
 		slog.String("interval", j.interval.String()),
+		slog.String("runTimeout", j.runTimeout.String()),
 		slog.Int("runs", j.Runs()),
 		slog.Int("skipped", j.Skipped()),
 		slog.Bool("stopped", j.Stopped()),
@@ -193,8 +234,9 @@ func (j *Job) Skipped() int {
 	return int(j.skipped.Load())
 }
 
-// Context returns the context passed to each run, which is canceled when
-// the job stops, including when a [Scheduler.Shutdown] deadline passes.
+// Context returns the job's context, which is canceled when the job stops,
+// including when a [Scheduler.Shutdown] deadline passes. Each run gets this
+// context, or with [WithRunTimeout] a child of it with that timeout.
 // Inside a [RunFunc], use the ctx argument instead; this method is for
 // code outside the run function that needs to follow the job's lifetime.
 func (j *Job) Context() context.Context {
@@ -275,7 +317,60 @@ func (j *Job) call() (err error) {
 		}
 	}()
 
-	return j.run(j.ctx, j)
+	ctx := j.ctx
+	if j.runTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, j.runTimeout)
+		defer cancel()
+	}
+
+	// Deferred after cancel, so it runs first: the watch is removed before
+	// cancel runs, and a run that returns before its timeout never starts
+	// the watcher.
+	if j.cancelGrace > 0 {
+		defer j.watchCancel(ctx)()
+	}
+
+	return j.run(ctx, j)
+}
+
+// watchCancel logs a warning if the run using ctx has not returned
+// cancelGrace after ctx is canceled, and another when it then returns.
+// Call the returned function when the run returns; it waits for any
+// warning to be logged, so none is written after the job's goroutine
+// exits.
+func (j *Job) watchCancel(ctx context.Context) (returned func()) {
+	done := make(chan struct{})     // closed when the run returns
+	finished := make(chan struct{}) // closed when the watcher exits
+	stop := context.AfterFunc(ctx, func() {
+		defer close(finished)
+
+		canceled := time.Now()
+		t := time.NewTimer(j.cancelGrace)
+		defer t.Stop()
+
+		select {
+		case <-t.C:
+			j.logger.Warn("run ignored cancellation", "job", j,
+				"reason", ctx.Err(), "after", j.cancelGrace.String())
+		case <-done:
+			return
+		}
+
+		// Say when it finally returns, so the log shows how long it held
+		// its slot.
+		<-done
+		j.logger.Warn("run returned late after cancellation", "job", j,
+			"after", time.Since(canceled).String())
+	})
+
+	return func() {
+		if stop() {
+			return // ctx was not canceled during the run
+		}
+		close(done)
+		<-finished
+	}
 }
 
 // defaultErrorHandler logs a run's error. A panic is logged with its stack

@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -56,9 +57,15 @@ func TestJobString(t *testing.T) {
 		job.Stop()
 
 		got := job.String()
-		want := `Job{name: "test", interval: 1h0m0s, stopOnError: false, maxRuns: 0, runs: 1, skipped: 0, stopped: true}`
+		want := `Job{name: "test", interval: 1h0m0s, stopOnError: false, maxRuns: 0, runTimeout: 0s, runs: 1, skipped: 0, stopped: true}`
 		if got != want {
 			t.Errorf("\ngot  %v,\nwant %v\nfor job.String()", got, want)
+		}
+
+		timed := mustSchedule(t, s, "timed", time.Hour, keepRunning,
+			scheduler.WithRunTimeout(90*time.Second))
+		if got := timed.String(); !strings.Contains(got, "runTimeout: 1m30s,") {
+			t.Errorf("String() = %s, want it to contain runTimeout: 1m30s", got)
 		}
 	})
 }
