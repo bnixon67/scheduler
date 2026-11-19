@@ -265,3 +265,46 @@ func ExampleScheduler_Shutdown() {
 	// report done, canceled: false
 	// shutdown: <nil>
 }
+
+// This example spreads three jobs that share an interval across it, so
+// they take turns instead of all running at the same moment. Each keeps
+// its offset on every run. For an offset that differs on each start, use
+// rand.N(interval) from math/rand/v2; to wait one whole interval before
+// the first run, pass the interval itself.
+func ExampleWithStartDelay() {
+	s, err := scheduler.New(3)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Stop()
+
+	const interval = 150 * time.Millisecond
+	names := []string{"a", "b", "c"}
+	var jobs []*scheduler.Job
+	for i, name := range names {
+		offset := time.Duration(i) * interval / time.Duration(len(names))
+		job, err := s.Schedule(name, interval,
+			func(_ context.Context, job *scheduler.Job) error {
+				fmt.Println(job.Name(), "run", job.Runs())
+				return nil
+			},
+			scheduler.WithStartDelay(offset), // 0, 50ms, 100ms
+			scheduler.WithMaxRuns(2))
+		if err != nil {
+			log.Fatal(err)
+		}
+		jobs = append(jobs, job)
+	}
+
+	for _, job := range jobs {
+		<-job.Context().Done()
+	}
+
+	// Output:
+	// a run 1
+	// b run 1
+	// c run 1
+	// a run 2
+	// b run 2
+	// c run 2
+}

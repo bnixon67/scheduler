@@ -57,7 +57,7 @@ func TestJobString(t *testing.T) {
 		job.Stop()
 
 		got := job.String()
-		want := `Job{name: "test", interval: 1h0m0s, stopOnError: false, maxRuns: 0, runTimeout: 0s, runs: 1, skipped: 0, stopped: true}`
+		want := `Job{name: "test", interval: 1h0m0s, stopOnError: false, maxRuns: 0, runTimeout: 0s, startDelay: 0s, runs: 1, skipped: 0, stopped: true}`
 		if got != want {
 			t.Errorf("\ngot  %v,\nwant %v\nfor job.String()", got, want)
 		}

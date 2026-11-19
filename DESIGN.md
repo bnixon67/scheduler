@@ -143,6 +143,15 @@ A job runs once as soon as it is scheduled, then on a fixed grid: one
 interval after scheduling, two intervals after, and so on. A run's start
 time does not move the grid, so slow runs don't make the schedule drift.
 
+`WithStartDelay` moves the first run, and with it the whole grid, later
+by its delay. `runJob` waits on a timer before creating the ticker, so
+the grid starts at the first run rather than at scheduling. The wait
+holds no slot and ends at once if the job or scheduler stops. Since each
+job keeps its own grid, jobs given different delays stay apart for good,
+which is how to stop jobs that share an interval from all running at the
+same moment. The package picks no delay itself: callers choose random
+(`rand.N(interval)`), even or name-based offsets as they need.
+
 The grid comes from a `time.Ticker`. A ticker keeps at most one pending
 tick and drops the rest, which is what makes the scheduler **skip** missed
 runs instead of making them up:

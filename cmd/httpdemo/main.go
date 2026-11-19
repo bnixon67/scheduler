@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,7 +32,9 @@ import (
 )
 
 // Every site is checked every interval, maxRuns times. A check that takes
-// longer than runTimeout is canceled and counts as a failure.
+// longer than runTimeout is canceled and counts as a failure. Each site
+// starts at a random point in the first interval, so the checks are spread
+// out instead of all happening at the same moment.
 const (
 	interval   = 10 * time.Second
 	runTimeout = 5 * time.Second
@@ -98,6 +101,7 @@ func main() {
 	for i, site := range sites {
 		c := &check{site: site}
 		c.job, err = s.Schedule(site, interval, c.run,
+			scheduler.WithStartDelay(rand.N(interval)),
 			scheduler.WithRunTimeout(runTimeout),
 			scheduler.WithMaxRuns(maxRuns))
 		if err != nil {

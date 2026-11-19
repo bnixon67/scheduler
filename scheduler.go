@@ -14,10 +14,11 @@ import (
 
 // Scheduler owns a set of jobs and runs each one periodically.
 //
-// A job's runs are scheduled at fixed times: once when it is scheduled, then
-// every interval after that. At most maxConcurrent jobs run at once; a job
-// whose run is due while all slots are busy waits for one. A job never runs
-// concurrently with itself.
+// A job's runs are scheduled at fixed times: once when it is scheduled, or
+// after the delay set with [WithStartDelay], then every interval after
+// that. At most maxConcurrent jobs run at once; a job whose run is due
+// while all slots are busy waits for one. A job never runs concurrently
+// with itself.
 //
 // A run can start late, because the previous run took longer than the
 // interval or because the job waited for a slot. When a run starts late,
@@ -128,11 +129,12 @@ func (s *Scheduler) Job(name string) (job *Job, ok bool) {
 	return job, ok
 }
 
-// Schedule creates a job that calls run immediately, then once per
-// interval, and returns it. The name must be unique among the jobs
-// currently scheduled; it can be reused once its job stops. What run
-// returns decides whether the job keeps running; see [RunFunc]. Optional
-// settings are applied using [JobOption] values.
+// Schedule creates a job that calls run immediately, or after the delay
+// set with [WithStartDelay], then once per interval, and returns it. The
+// name must be unique among the jobs currently scheduled; it can be reused
+// once its job stops. What run returns decides whether the job keeps
+// running; see [RunFunc]. Optional settings are applied using [JobOption]
+// values.
 //
 // Schedule returns [ErrEmptyName] if name is empty, [ErrInvalidInterval]
 // if interval is not positive, [ErrNilRun] if run is nil,
@@ -258,10 +260,24 @@ func (s *Scheduler) runJob(job *Job) {
 	defer s.wg.Done()
 	defer job.Stop()
 
+	due := time.Now() // when the next run should start
+
+	// Wait for the first run. The ticker is created afterward, so later
+	// runs fall every interval after the first one, not after scheduling.
+	if job.startDelay > 0 {
+		timer := time.NewTimer(job.startDelay)
+		defer timer.Stop()
+		select {
+		case due = <-timer.C:
+		case <-job.ctx.Done():
+			return
+		case <-s.quit.Done():
+			return
+		}
+	}
+
 	ticker := time.NewTicker(job.interval)
 	defer ticker.Stop()
-
-	due := time.Now() // when the next run should start
 
 	for {
 		// Wait for a free run slot.

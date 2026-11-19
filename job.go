@@ -56,6 +56,7 @@ type Job struct {
 	maxRuns     int
 	runTimeout  time.Duration // 0 means no timeout
 	cancelGrace time.Duration // 0 means no warning
+	startDelay  time.Duration // 0 means run as soon as scheduled
 	logger      *slog.Logger
 	sched       *Scheduler // nil only in tests that run a job directly
 
@@ -128,6 +129,23 @@ func WithRunTimeout(d time.Duration) JobOption {
 	return func(j *Job) { j.runTimeout = max(d, 0) }
 }
 
+// WithStartDelay delays a job's first run by d. Later runs follow every
+// interval after the first, so d shifts the job's whole schedule. If d is
+// 0 or negative, the job first runs as soon as it is scheduled, which is
+// the default.
+//
+// Pass the interval to wait one full interval before the first run. To
+// spread jobs that share an interval, so they do not all run at the same
+// moment, give each a different delay, such as rand.N(interval) from
+// math/rand/v2. The offsets last, because each job's later runs keep to
+// its own schedule.
+//
+// The job holds no concurrency slot while it waits, and [Job.Stop],
+// [Scheduler.Stop] and [Scheduler.Shutdown] end the wait at once.
+func WithStartDelay(d time.Duration) JobOption {
+	return func(j *Job) { j.startDelay = max(d, 0) }
+}
+
 // DefaultCancelGrace is how long a run may keep going after its context
 // is canceled before the scheduler logs a warning; see [WithCancelGrace].
 const DefaultCancelGrace = 5 * time.Second
@@ -197,6 +215,7 @@ func (j *Job) String() string {
 			"stopOnError: %t, "+
 			"maxRuns: %d, "+
 			"runTimeout: %s, "+
+			"startDelay: %s, "+
 			"runs: %d, "+
 			"skipped: %d, "+
 			"stopped: %t}",
@@ -205,6 +224,7 @@ func (j *Job) String() string {
 		j.stopOnError,
 		j.maxRuns,
 		j.runTimeout,
+		j.startDelay,
 		j.Runs(),
 		j.Skipped(),
 		j.Stopped(),
@@ -219,6 +239,7 @@ func (j *Job) LogValue() slog.Value {
 		slog.String("name", j.name),
 		slog.String("interval", j.interval.String()),
 		slog.String("runTimeout", j.runTimeout.String()),
+		slog.String("startDelay", j.startDelay.String()),
 		slog.Int("runs", j.Runs()),
 		slog.Int("skipped", j.Skipped()),
 		slog.Bool("stopped", j.Stopped()),
