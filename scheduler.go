@@ -3,6 +3,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -117,6 +118,22 @@ func (s *Scheduler) JobNames() []string {
 	defer s.mu.Unlock()
 
 	return slices.Sorted(maps.Keys(s.jobs))
+}
+
+// Jobs returns the scheduled jobs, sorted by name like [Scheduler.JobNames].
+// They are read together, so unlike calling [Scheduler.Job] for each name,
+// no job can stop between the listing and the lookup. A job can still stop
+// after Jobs returns; its *Job stays valid and reports its final state.
+//
+// A job that has finished, for any reason, is no longer listed. To report
+// on jobs after they stop, keep the *Job that [Scheduler.Schedule] returns.
+func (s *Scheduler) Jobs() []*Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return slices.SortedFunc(maps.Values(s.jobs), func(a, b *Job) int {
+		return cmp.Compare(a.name, b.name)
+	})
 }
 
 // Job returns the scheduled job with the given name. ok is false if no

@@ -28,6 +28,40 @@ func TestSchedulerJobNames(t *testing.T) {
 	})
 }
 
+// TestSchedulerJobs verifies Jobs returns the scheduled jobs sorted by
+// name, and leaves out jobs that have finished.
+func TestSchedulerJobs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := mustNew(t, 1)
+		t.Cleanup(s.Stop)
+
+		if got := s.Jobs(); len(got) != 0 {
+			t.Errorf("Jobs() with nothing scheduled = %v, want none", got)
+		}
+
+		c := mustSchedule(t, s, "c", time.Second, keepRunning)
+		a := mustSchedule(t, s, "a", time.Second, keepRunning)
+		b := mustSchedule(t, s, "b", time.Second, keepRunning,
+			scheduler.WithMaxRuns(1))
+		synctest.Wait() // b has run once and finished
+
+		if got, want := s.Jobs(), []*scheduler.Job{a, c}; !slices.Equal(got, want) {
+			t.Errorf("Jobs() = %v, want %v", got, want)
+		}
+
+		// A job that stops after Jobs returns still reports its state.
+		jobs := s.Jobs()
+		a.Stop()
+		if !jobs[0].Stopped() || jobs[0].Runs() != 1 {
+			t.Errorf("stopped job from Jobs(): Stopped() = %t, Runs() = %d; want true, 1",
+				jobs[0].Stopped(), jobs[0].Runs())
+		}
+		if !b.Stopped() {
+			t.Error("job b with WithMaxRuns(1) not stopped after its run")
+		}
+	})
+}
+
 // TestSchedulerJob verifies looking up a scheduled job by name.
 func TestSchedulerJob(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

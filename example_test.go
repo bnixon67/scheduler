@@ -308,3 +308,29 @@ func ExampleWithStartDelay() {
 	// b run 2
 	// c run 2
 }
+
+// This example lists every scheduled job, as a status page might.
+func ExampleScheduler_Jobs() {
+	s, err := scheduler.New(2)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Stop()
+
+	noop := func(context.Context, *scheduler.Job) error { return nil }
+	for _, name := range []string{"reports", "cleanup", "backup"} {
+		if _, err := s.Schedule(name, time.Hour, noop); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	for _, job := range s.Jobs() { // sorted by name
+		fmt.Printf("%s every %v, stopped: %t\n",
+			job.Name(), job.Interval(), job.Stopped())
+	}
+
+	// Output:
+	// backup every 1h0m0s, stopped: false
+	// cleanup every 1h0m0s, stopped: false
+	// reports every 1h0m0s, stopped: false
+}
