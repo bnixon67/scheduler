@@ -204,8 +204,8 @@ returns.
 - After either scheduler call, `Schedule` returns `ErrSchedulerStopped`.
   The `stopped` flag is set under the mutex before jobs are collected, so
   no job can be added after the list of jobs to stop is taken.
-- `wg.Add` happens under the same mutex, so it cannot race with
-  `wg.Wait`.
+- `wg.Go` adds each job goroutine under the same mutex, so it cannot race
+  with `wg.Wait`.
 
 ### Runs that ignore cancellation
 
@@ -250,6 +250,11 @@ A panic in a run is recovered and turned into a `*PanicError` holding the
 panic value and stack trace, then handled like any other error. One
 failing job therefore cannot crash the program. Recovering can leave
 shared state half updated, which is why `WithStopOnError` exists.
+
+The error handler is caller code running on the job's goroutine too, so a
+panic in it is also recovered and logged, and the job continues as if the
+handler had returned. That log has the handler's panic value and stack
+but not the run's error, because a custom handler may exist to redact it.
 
 An error that only says the job's context was canceled, returned after the
 job stopped, is not a failure and is not reported. That is what a

@@ -185,9 +185,8 @@ func (s *Scheduler) Schedule(name string, interval time.Duration,
 
 	s.jobs[name] = job
 
-	// wg.Add happens under mu, so it cannot race with Stop's wg.Wait.
-	s.wg.Add(1)
-	go s.runJob(job)
+	// wg.Go adds to wg under mu, so it cannot race with Stop's wg.Wait.
+	s.wg.Go(func() { s.runJob(job) })
 
 	return job, nil
 }
@@ -216,6 +215,11 @@ func (s *Scheduler) Stop() {
 //
 // After Shutdown, [Scheduler.Schedule] returns [ErrSchedulerStopped].
 // Shutdown is safe to call more than once and together with Stop.
+//
+// Stop whatever schedules jobs first. For example, if HTTP handlers call
+// Schedule, call [net/http.Server.Shutdown] before this Shutdown: it
+// waits for handlers in progress to return, so none of them gets
+// ErrSchedulerStopped.
 func (s *Scheduler) Shutdown(ctx context.Context) error {
 	s.markStopped()
 	s.cancelQuit()
@@ -274,7 +278,6 @@ func (s *Scheduler) stopAll() {
 // runJob drives one scheduled job until it finishes. However it finishes,
 // the job is stopped, which removes it from the registry.
 func (s *Scheduler) runJob(job *Job) {
-	defer s.wg.Done()
 	defer job.Stop()
 
 	due := time.Now() // when the next run should start

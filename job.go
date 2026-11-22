@@ -99,6 +99,12 @@ type JobOption func(*Job)
 // value and stack trace, which can include secrets such as credentials or
 // connection strings. If errors or panic values may hold sensitive data,
 // supply a handler that redacts it before logging.
+//
+// The handler runs on the job's goroutine while the run's concurrency
+// slot is still held, so a slow handler delays other jobs too. If it
+// panics, the panic is recovered and logged with the handler's
+// panic value and stack trace, but not the run's error, and the job then
+// continues as if the handler had returned.
 func WithErrorHandler(handler func(*Job, error)) JobOption {
 	return func(j *Job) {
 		if handler == nil {
@@ -383,7 +389,7 @@ func (j *Job) execute() bool {
 	case stop:
 		return false
 	case failed:
-		j.onError(j, err)
+		j.handleError(err)
 		if j.stopOnError {
 			return false
 		}
@@ -456,6 +462,20 @@ func (j *Job) watchCancel(ctx context.Context) (returned func()) {
 		close(done)
 		<-finished
 	}
+}
+
+// handleError passes a run's error to the job's error handler. The handler
+// is caller code running on the job's goroutine, so a panic in it is
+// recovered and logged, like a panic in a run, instead of crashing the
+// program. The log leaves out err, which the handler may exist to redact.
+func (j *Job) handleError(err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			j.logger.Error("job error handler panicked",
+				"job", j, "value", r, "stack", string(debug.Stack()))
+		}
+	}()
+	j.onError(j, err)
 }
 
 // defaultErrorHandler logs a run's error. A panic is logged with its stack
