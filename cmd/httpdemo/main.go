@@ -1,13 +1,17 @@
-// Command httpdemo checks a few websites every 10 seconds, three times
-// each, then prints each site's runs, successes and latest error.
-// Press Ctrl-C to stop early.
+// Command httpdemo checks websites periodically, then prints each site's
+// runs, successes and latest error. By default it checks every 10 seconds,
+// three times, so it finishes in about half a minute. Press Ctrl-C to
+// stop early.
 //
 // Usage:
 //
 //	httpdemo [flags] [url ...]
 //
 // With no URLs, it checks a built-in list of sites that shows each kind
-// of result.
+// of result. To use it as a simple monitor, check less often and keep
+// going until interrupted:
+//
+//	httpdemo -interval 1m -timeout 20s -runs 0 https://example.com
 //
 // Use -log-level debug to see the scheduler's own debug messages, such as
 // late runs and jobs stopping, and -log-format json for JSON logs.
@@ -18,7 +22,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,15 +33,9 @@ import (
 	"github.com/bnixon67/scheduler"
 )
 
-// Every site is checked every interval, maxRuns times. A check that takes
-// longer than runTimeout is canceled and counts as a failure. Each site
-// starts at a random point in the first interval, so the checks are spread
-// out instead of all happening at the same moment.
-const (
-	interval   = 10 * time.Second
-	runTimeout = 5 * time.Second
-	maxRuns    = 3
-)
+// minInterval is the shortest -interval accepted, so a typo such as
+// -interval 1ms cannot make the program flood a site with requests.
+const minInterval = time.Second
 
 // defaultSites are checked when no URLs are given. Each shows a
 // different result.
@@ -53,13 +50,18 @@ func main() {
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
 		fmt.Fprintf(out, "Usage: httpdemo [flags] [url ...]\n\n")
-		fmt.Fprintf(out, "Checks each URL every %v, %d times, then prints a summary.\n",
-			interval, maxRuns)
+		fmt.Fprintf(out, "Checks each URL every -interval, -runs times, then prints a summary.\n")
 		fmt.Fprintf(out, "With no URLs, checks a built-in list of sites.\n\n")
 		fmt.Fprintf(out, "Flags:\n")
 		flag.PrintDefaults()
 	}
 
+	interval := flag.Duration("interval", 10*time.Second,
+		"time between checks of each URL, at least "+minInterval.String())
+	runTimeout := flag.Duration("timeout", 5*time.Second,
+		"how long a check may take before it fails; must be shorter than -interval")
+	maxRuns := flag.Int("runs", 3,
+		"checks per URL; 0 means keep checking until interrupted")
 	level := slog.LevelInfo
 	flag.TextVar(&level, "log-level", level,
 		"minimum log `level`: debug, info, warn or error")
@@ -80,6 +82,20 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
+	switch {
+	case *interval < minInterval:
+		usageError("invalid value %v for flag -interval: want at least %v",
+			*interval, minInterval)
+	case *runTimeout <= 0:
+		usageError("invalid value %v for flag -timeout: want more than 0",
+			*runTimeout)
+	case *runTimeout >= *interval:
+		usageError("-timeout %v must be shorter than -interval %v",
+			*runTimeout, *interval)
+	case *maxRuns < 0:
+		usageError("invalid value %d for flag -runs: want 0 or more", *maxRuns)
+	}
+
 	sites := flag.Args()
 	if len(sites) == 0 {
 		sites = defaultSites
@@ -96,13 +112,18 @@ func main() {
 		fatal("new scheduler", err)
 	}
 
+	// Each check that takes longer than the timeout is canceled and counts
+	// as a failure. The sites start at even steps through the first
+	// interval, so the checks are spread out instead of all happening at
+	// the same moment, and the first site is checked at once.
 	checks := make([]*check, len(sites))
 	for i, site := range sites {
 		c := &check{site: site}
-		c.job, err = s.Schedule(site, interval, c.run,
-			scheduler.WithStartDelay(rand.N(interval)),
-			scheduler.WithRunTimeout(runTimeout),
-			scheduler.WithMaxRuns(maxRuns))
+		offset := time.Duration(i) * *interval / time.Duration(len(sites))
+		c.job, err = s.Schedule(site, *interval, c.run,
+			scheduler.WithStartDelay(offset),
+			scheduler.WithRunTimeout(*runTimeout),
+			scheduler.WithMaxRuns(*maxRuns))
 		if err != nil {
 			fatal("schedule "+site, err)
 		}
