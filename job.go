@@ -354,36 +354,18 @@ func (j *Job) hasReachedMaxRuns() bool {
 }
 
 // execute runs the job once and returns whether it should run again.
-func (j *Job) execute() bool {
+func (j *Job) execute() (again bool) {
 	if j.hasReachedMaxRuns() {
 		j.logger.Debug("max runs reached", "job", j)
 		return false
 	}
 
-	j.runs.Add(1)
-
-	j.statusMu.Lock()
-	j.status.running = true
-	j.status.lastRun = time.Now()
-	j.statusMu.Unlock()
-
+	j.markRunning()
 	err := j.call()
+	stop, failed := j.classify(err)
 
-	// ErrStop is a request, not a failure, and neither is a run that
-	// returns ctx.Err() after the job was stopped.
-	stop := errors.Is(err, ErrStop)
-	canceled := j.Stopped() && errors.Is(err, context.Canceled)
-	failed := err != nil && !stop && !canceled
-
-	// Update the status before calling the error handler, so the handler
-	// sees this run's result.
-	j.statusMu.Lock()
-	j.status.running = false
-	j.status.lastErr = nil
-	if failed {
-		j.status.lastErr = err
-	}
-	j.statusMu.Unlock()
+	// Before the error handler, so the handler sees this run's result.
+	j.markFinished(failed, err)
 
 	switch {
 	case stop:
@@ -397,6 +379,37 @@ func (j *Job) execute() bool {
 
 	// Stop right after the last allowed run instead of one interval later.
 	return !j.hasReachedMaxRuns()
+}
+
+// markRunning records that a run is starting.
+func (j *Job) markRunning() {
+	j.runs.Add(1)
+
+	j.statusMu.Lock()
+	defer j.statusMu.Unlock()
+	j.status.running = true
+	j.status.lastRun = time.Now()
+}
+
+// classify reports whether a run's error asks the job to stop, and
+// whether it is a failure to report. ErrStop is a request, not a failure,
+// and neither is a run that returns ctx.Err() after the job was stopped.
+func (j *Job) classify(err error) (stop, failed bool) {
+	stop = errors.Is(err, ErrStop)
+	canceled := j.Stopped() && errors.Is(err, context.Canceled)
+	return stop, err != nil && !stop && !canceled
+}
+
+// markFinished records that a run has returned, and its error if it
+// failed.
+func (j *Job) markFinished(failed bool, err error) {
+	j.statusMu.Lock()
+	defer j.statusMu.Unlock()
+	j.status.running = false
+	j.status.lastErr = nil
+	if failed {
+		j.status.lastErr = err
+	}
 }
 
 // call runs the job's function, recovering a panic as a *PanicError so a

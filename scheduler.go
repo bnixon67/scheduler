@@ -280,63 +280,68 @@ func (s *Scheduler) stopAll() {
 func (s *Scheduler) runJob(job *Job) {
 	defer job.Stop()
 
-	due := time.Now() // when the next run should start
-
-	// Wait for the first run. The ticker is created afterward, so later
-	// runs fall every interval after the first one, not after scheduling.
+	due, ok := time.Now(), true // when the next run should start
 	if job.startDelay > 0 {
 		timer := time.NewTimer(job.startDelay)
 		defer timer.Stop()
-		select {
-		case due = <-timer.C:
-		case <-job.ctx.Done():
-			return
-		case <-s.quit.Done():
-			return
-		}
+		due, ok = s.waitFor(job, timer.C)
 	}
 
+	// The ticker is created after the start delay, so runs fall every
+	// interval after the first one, not after scheduling. It keeps one
+	// tick that fires during a run and drops the rest, which is what skips
+	// missed runs. The kept tick's value is when it fired, so lateness
+	// covers both a slow previous run and waiting for a slot.
 	ticker := time.NewTicker(job.interval)
 	defer ticker.Stop()
 
-	for {
-		// Wait for a free run slot.
-		select {
-		case s.slots <- struct{}{}:
-		case <-job.ctx.Done():
-			return
-		case <-s.quit.Done():
-			return
-		}
-
-		// Both cases can be ready at once, and select picks randomly,
-		// so check again before running.
-		if s.quit.Err() != nil || job.Stopped() {
-			<-s.slots
-			return
-		}
-
+	for ok && s.acquireSlot(job) {
 		job.recordLateness(time.Since(due))
-
 		again := job.execute()
-		<-s.slots
-
+		s.releaseSlot()
 		if !again {
 			return
 		}
-
-		// Wait for the next scheduled time. time.Ticker keeps one tick
-		// that fires during a run and drops the rest, which is what
-		// skips missed runs. The kept tick's value is when it fired, so
-		// lateness covers both a slow previous run and waiting for a slot.
-		select {
-		case due = <-ticker.C:
-		case <-job.ctx.Done():
-			return
-		case <-s.quit.Done():
-			return
-		}
+		due, ok = s.waitFor(job, ticker.C)
 	}
+}
+
+// waitFor waits for c and returns the time it delivers. ok is false if
+// the job or the scheduler stops first.
+func (s *Scheduler) waitFor(job *Job, c <-chan time.Time) (t time.Time, ok bool) {
+	select {
+	case t = <-c:
+		return t, true
+	case <-job.ctx.Done():
+		return time.Time{}, false
+	case <-s.quit.Done():
+		return time.Time{}, false
+	}
+}
+
+// acquireSlot waits for a free run slot. It returns false, holding no
+// slot, if the job or the scheduler stops first.
+func (s *Scheduler) acquireSlot(job *Job) bool {
+	select {
+	case s.slots <- struct{}{}:
+	case <-job.ctx.Done():
+		return false
+	case <-s.quit.Done():
+		return false
+	}
+
+	// A slot and a stop can be ready at once, and select picks randomly,
+	// so check again before running.
+	if s.quit.Err() != nil || job.Stopped() {
+		s.releaseSlot()
+		return false
+	}
+	return true
+}
+
+// releaseSlot frees the run slot taken by acquireSlot.
+func (s *Scheduler) releaseSlot() {
+	<-s.slots
 }
 
 // remove deletes job from the registry. It is called once, from

@@ -47,6 +47,35 @@ var defaultSites = []string{
 }
 
 func main() {
+	cfg := parseFlags()
+
+	logger := newLogger(cfg.logLevel, cfg.logFormat)
+	slog.SetDefault(logger)
+
+	s, err := scheduler.New(5, scheduler.WithLogger(logger))
+	if err != nil {
+		fatal("new scheduler", err)
+	}
+
+	checks := scheduleChecks(s, cfg)
+	waitForChecksOrSignal(checks)
+	shutdown(s)
+	printSummary(checks)
+}
+
+// config is the program's settings, from its flags and arguments.
+type config struct {
+	interval  time.Duration
+	timeout   time.Duration
+	runs      int
+	logLevel  slog.Level
+	logFormat string
+	sites     []string
+}
+
+// parseFlags parses the command line, and exits with the usage message if
+// it is invalid.
+func parseFlags() config {
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
 		fmt.Fprintf(out, "Usage: httpdemo [flags] [url ...]\n\n")
@@ -56,109 +85,136 @@ func main() {
 		flag.PrintDefaults()
 	}
 
-	interval := flag.Duration("interval", 10*time.Second,
+	cfg := config{logLevel: slog.LevelInfo}
+	flag.DurationVar(&cfg.interval, "interval", 10*time.Second,
 		"time between checks of each URL, at least "+minInterval.String())
-	runTimeout := flag.Duration("timeout", 5*time.Second,
+	flag.DurationVar(&cfg.timeout, "timeout", 5*time.Second,
 		"how long a check may take before it fails; must be shorter than -interval")
-	maxRuns := flag.Int("runs", 3,
+	flag.IntVar(&cfg.runs, "runs", 3,
 		"checks per URL; 0 means keep checking until interrupted")
-	level := slog.LevelInfo
-	flag.TextVar(&level, "log-level", level,
+	flag.TextVar(&cfg.logLevel, "log-level", cfg.logLevel,
 		"minimum log `level`: debug, info, warn or error")
-	logFormat := flag.String("log-format", "text", "log format: text or json")
+	flag.StringVar(&cfg.logFormat, "log-format", "text", "log format: text or json")
 	flag.Parse()
 
-	opts := &slog.HandlerOptions{Level: level}
-	var handler slog.Handler
-	switch *logFormat {
-	case "text":
-		handler = slog.NewTextHandler(os.Stderr, opts)
-	case "json":
-		handler = slog.NewJSONHandler(os.Stderr, opts)
-	default:
-		usageError("invalid value %q for flag -log-format: want text or json",
-			*logFormat)
+	cfg.sites = flag.Args()
+	if len(cfg.sites) == 0 {
+		cfg.sites = defaultSites
 	}
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
 
+	if err := cfg.validate(); err != nil {
+		usageError(err)
+	}
+	return cfg
+}
+
+// validate reports the first invalid setting in cfg.
+func (cfg config) validate() error {
 	switch {
-	case *interval < minInterval:
-		usageError("invalid value %v for flag -interval: want at least %v",
-			*interval, minInterval)
-	case *runTimeout <= 0:
-		usageError("invalid value %v for flag -timeout: want more than 0",
-			*runTimeout)
-	case *runTimeout >= *interval:
-		usageError("-timeout %v must be shorter than -interval %v",
-			*runTimeout, *interval)
-	case *maxRuns < 0:
-		usageError("invalid value %d for flag -runs: want 0 or more", *maxRuns)
+	case cfg.logFormat != "text" && cfg.logFormat != "json":
+		return fmt.Errorf("invalid value %q for flag -log-format: want text or json",
+			cfg.logFormat)
+	case cfg.interval < minInterval:
+		return fmt.Errorf("invalid value %v for flag -interval: want at least %v",
+			cfg.interval, minInterval)
+	case cfg.timeout <= 0:
+		return fmt.Errorf("invalid value %v for flag -timeout: want more than 0",
+			cfg.timeout)
+	case cfg.timeout >= cfg.interval:
+		return fmt.Errorf("-timeout %v must be shorter than -interval %v",
+			cfg.timeout, cfg.interval)
+	case cfg.runs < 0:
+		return fmt.Errorf("invalid value %d for flag -runs: want 0 or more", cfg.runs)
 	}
-
-	sites := flag.Args()
-	if len(sites) == 0 {
-		sites = defaultSites
-	}
-	for _, site := range sites {
-		if u, err := url.Parse(site); err != nil || u.Host == "" ||
-			(u.Scheme != "http" && u.Scheme != "https") {
-			usageError("invalid URL %q: want http://host or https://host", site)
+	for _, site := range cfg.sites {
+		if !isWebURL(site) {
+			return fmt.Errorf("invalid URL %q: want http://host or https://host", site)
 		}
 	}
+	return nil
+}
 
-	s, err := scheduler.New(5, scheduler.WithLogger(logger))
-	if err != nil {
-		fatal("new scheduler", err)
+// isWebURL reports whether s is an http or https URL with a host.
+func isWebURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+// newLogger returns a logger that writes to stderr in format, text or
+// json, at level and above.
+func newLogger(level slog.Level, format string) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: level}
+	if format == "json" {
+		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
 	}
+	return slog.New(slog.NewTextHandler(os.Stderr, opts))
+}
 
-	// Each check that takes longer than the timeout is canceled and counts
-	// as a failure. The sites start at even steps through the first
-	// interval, so the checks are spread out instead of all happening at
-	// the same moment, and the first site is checked at once.
-	checks := make([]*check, len(sites))
-	for i, site := range sites {
+// scheduleChecks schedules a check of each site. Each check that takes
+// longer than the timeout is canceled and counts as a failure. The sites
+// start at even steps through the first interval, so the checks are
+// spread out instead of all happening at the same moment, and the first
+// site is checked at once.
+func scheduleChecks(s *scheduler.Scheduler, cfg config) []*check {
+	checks := make([]*check, len(cfg.sites))
+	for i, site := range cfg.sites {
 		c := &check{site: site}
-		offset := time.Duration(i) * *interval / time.Duration(len(sites))
-		c.job, err = s.Schedule(site, *interval, c.run,
+		offset := time.Duration(i) * cfg.interval / time.Duration(len(cfg.sites))
+
+		var err error
+		c.job, err = s.Schedule(site, cfg.interval, c.run,
 			scheduler.WithStartDelay(offset),
-			scheduler.WithRunTimeout(*runTimeout),
-			scheduler.WithMaxRuns(*maxRuns))
+			scheduler.WithRunTimeout(cfg.timeout),
+			scheduler.WithMaxRuns(cfg.runs))
 		if err != nil {
 			fatal("schedule "+site, err)
 		}
 		checks[i] = c
 	}
+	return checks
+}
 
-	// Run until interrupted or every job has finished.
-	allDone := make(chan struct{})
+// waitForChecksOrSignal waits until every check has finished its runs, or
+// the program is interrupted.
+func waitForChecksOrSignal(checks []*check) {
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt, syscall.SIGTERM)
+	defer stop() // after this, a second interrupt kills the program
+
+	select {
+	case <-ctx.Done():
+		// The cause names the signal, such as "interrupt signal received".
+		slog.Info("stopping early", "reason", context.Cause(ctx))
+	case <-allFinished(checks):
+	}
+}
+
+// allFinished returns a channel that is closed once every check's job has
+// stopped.
+func allFinished(checks []*check) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
 		for _, c := range checks {
 			<-c.job.Context().Done()
 		}
-		close(allDone)
+		close(done)
 	}()
+	return done
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(),
-		os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	select {
-	case <-ctx.Done():
-		// The cause names the signal, such as "interrupt signal received".
-		logger.Info("stopping early", "reason", context.Cause(ctx))
-	case <-allDone:
-	}
-	stop() // a second interrupt now kills the program
-
-	// Let runs in progress finish, but give up on them after 5 seconds.
+// shutdown stops s, letting runs in progress finish but giving up on them
+// after 5 seconds.
+func shutdown(s *scheduler.Scheduler) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.Shutdown(ctx); err != nil {
-		logger.Warn("shutdown timed out; canceled runs still in progress",
-			"err", err)
+		slog.Warn("shutdown timed out; canceled runs still in progress", "err", err)
 	}
 	s.Stop() // wait for any canceled runs to return
+}
 
+// printSummary prints each check's runs, successes and latest error.
+func printSummary(checks []*check) {
 	fmt.Println()
 	for _, c := range checks {
 		runs := c.job.Runs()
@@ -202,10 +258,10 @@ func (c *check) run(ctx context.Context, _ *scheduler.Job) error {
 	return nil
 }
 
-// usageError prints a message and the usage, then exits with status 2,
-// as the flag package does for a bad flag.
-func usageError(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+// usageError prints err and the usage, then exits with status 2, as the
+// flag package does for a bad flag.
+func usageError(err error) {
+	fmt.Fprintln(os.Stderr, err)
 	flag.Usage()
 	os.Exit(2)
 }

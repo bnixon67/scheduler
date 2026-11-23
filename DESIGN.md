@@ -82,13 +82,15 @@ Job
 `Schedule` registers the job and starts one goroutine for it, `runJob`,
 which loops until the job finishes:
 
-1. Wait for a free slot by sending on `slots`, or return if the job or
-   scheduler is stopped.
-2. Check again for a stop, because `select` picks randomly when several
-   cases are ready.
-3. Record how late the run is, then call the `RunFunc`.
-4. Release the slot, and return if the job should not run again.
-5. Wait for the next tick, or return if stopped.
+1. `acquireSlot`: wait for a free slot by sending on `slots`, or return
+   if the job or scheduler is stopped. Then check again for a stop,
+   because `select` picks randomly when several cases are ready.
+2. Record how late the run is, then `execute` the run, which calls the
+   `RunFunc` and decides whether the job runs again.
+3. `releaseSlot`, and return if the job should not run again.
+4. `waitFor` the next tick, or return if stopped.
+
+Before the loop, `waitFor` also waits out the start delay, if any.
 
 However `runJob` returns, it calls `Job.Stop`, which removes the job from
 the registry.
